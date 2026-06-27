@@ -571,35 +571,42 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
       height: "100dvh", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
-      alignItems: "center", justifyContent: "space-between",
       overflow: "hidden",
     }}>
       {/* O — top, rotated 180° */}
       <div style={{
-        width: "100%", padding: "16px 20px", boxSizing: "border-box",
+        width: "100%", padding: "20px 20px 16px", boxSizing: "border-box",
+        paddingTop: "calc(20px + env(safe-area-inset-top))",
         borderBottom: `1px solid ${theme.border}`,
         background: !winner && turn === "O" ? "rgba(116,185,255,0.05)" : "transparent",
         transition: "background 0.4s",
         transform: "rotate(180deg)",
         display: "flex", flexDirection: "column", alignItems: "flex-start",
-        position: "relative",
+        flexShrink: 0,
       }}>
         {versusPanel("O")}
       </div>
 
-      {/* Board — centre */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px", padding: "10px 0", position: "relative" }}>
+      {/* Board — centre, fills remaining space */}
+      <div style={{
+        flex: 1,
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        gap: "12px",
+      }}>
         {boardGrid}
         <button onClick={onHome} style={{ ...btn(false), padding: "5px 16px", fontSize: "10px" }}>← Home</button>
       </div>
 
       {/* X — bottom, normal */}
       <div style={{
-        width: "100%", padding: "16px 20px", boxSizing: "border-box",
+        width: "100%", padding: "16px 20px 20px", boxSizing: "border-box",
+        paddingBottom: "calc(20px + env(safe-area-inset-bottom))",
         borderTop: `1px solid ${theme.border}`,
         background: !winner && turn === "X" ? "rgba(255,107,107,0.05)" : "transparent",
         transition: "background 0.4s",
         display: "flex", flexDirection: "column", alignItems: "flex-start",
+        flexShrink: 0,
       }}>
         {versusPanel("X")}
       </div>
