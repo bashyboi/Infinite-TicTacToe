@@ -577,7 +577,6 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
       {/* O — top, rotated 180° */}
       <div style={{
         width: "100%", padding: "16px 20px", boxSizing: "border-box",
-        paddingTop: "calc(16px + env(safe-area-inset-bottom))",
         borderBottom: `1px solid ${theme.border}`,
         background: !winner && turn === "O" ? "rgba(116,185,255,0.05)" : "transparent",
         transition: "background 0.4s",
@@ -597,7 +596,6 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
       {/* X — bottom, normal */}
       <div style={{
         width: "100%", padding: "16px 20px", boxSizing: "border-box",
-        paddingBottom: "calc(16px + env(safe-area-inset-bottom))",
         borderTop: `1px solid ${theme.border}`,
         background: !winner && turn === "X" ? "rgba(255,107,107,0.05)" : "transparent",
         transition: "background 0.4s",
