@@ -267,7 +267,7 @@ function HomeScreen({ onStart, dark, onToggleDark }) {
 
   return (
     <div style={{
-      height: "100vh", background: theme.bg, color: theme.text,
+      height: "100dvh", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
       overflow: "hidden",
@@ -568,7 +568,7 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
   // ════════════════════════════════
   if (!isBot) return (
     <div style={{
-      height: "100vh", background: theme.bg, color: theme.text,
+      height: "100dvh", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "space-between",
@@ -611,7 +611,7 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
   // ════════════════════════════════
   return (
     <div style={{
-      minHeight: "100vh", background: theme.bg, color: theme.text,
+      minHeight: "100dvh", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center", padding: "24px",
@@ -702,7 +702,7 @@ function SplashScreen() {
 
   return (
     <div style={{
-      height: "100vh", background: "#0f0f13",
+      height: "100dvh", background: "#0f0f13",
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center",
       fontFamily: "'Courier New', monospace", gap: "28px",
@@ -744,7 +744,7 @@ function PreGameScreen({ config, dark }) {
 
   return (
     <div style={{
-      height: "100vh", background: dark ? "#0f0f13" : "#f0f0f0",
+      height: "100dvh", background: dark ? "#0f0f13" : "#f0f0f0",
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center",
       fontFamily: "'Courier New', monospace", gap: "28px",
