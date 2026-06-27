@@ -1,0 +1,829 @@
+import { useState, useEffect, useRef } from "react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS & PURE HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+const WINNING_COMBOS = [
+  [0,1,2],[3,4,5],[6,7,8],
+  [0,3,6],[1,4,7],[2,5,8],
+  [0,4,8],[2,4,6],
+];
+const MAX_MARKS = 3;
+
+function checkWinner(board) {
+  for (const [a,b,c] of WINNING_COMBOS) {
+    if (board[a] && board[b] && board[c] &&
+        board[a].player === board[b].player &&
+        board[a].player === board[c].player)
+      return { player: board[a].player, line: [a,b,c] };
+  }
+  return null;
+}
+
+function getPlayerMoves(board, player) {
+  return board
+    .map((cell, i) => (cell?.player === player ? { i, age: cell.age } : null))
+    .filter(Boolean)
+    .sort((a, b) => a.age - b.age);
+}
+
+function applyMove(board, idx, player, moveCount) {
+  const nb = board.map(c => c ? { ...c } : null);
+  nb[idx] = { player, age: moveCount };
+  const moves = getPlayerMoves(nb, player);
+  let removed = null;
+  if (moves.length > MAX_MARKS) { removed = moves[0].i; nb[removed] = null; }
+  return [nb, removed];
+}
+
+function getEmptyCells(board) {
+  return board.map((c, i) => (c ? null : i)).filter(i => i !== null);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI
+// ─────────────────────────────────────────────────────────────────────────────
+function scoreBoard(board, aiPlayer, depth) {
+  const result = checkWinner(board);
+  if (!result) return 0;
+  return result.player === aiPlayer ? 10 - depth : depth - 10;
+}
+
+function minimax(board, depth, isMax, aiPlayer, humanPlayer, mc, alpha, beta, maxDepth) {
+  const score = scoreBoard(board, aiPlayer, depth);
+  if (score !== 0 || depth >= maxDepth) return score;
+  const empties = getEmptyCells(board);
+  if (empties.length === 0) return 0;
+  if (isMax) {
+    let best = -Infinity;
+    for (const idx of empties) {
+      const [nb] = applyMove(board, idx, aiPlayer, mc + depth);
+      const val = minimax(nb, depth+1, false, aiPlayer, humanPlayer, mc, alpha, beta, maxDepth);
+      best = Math.max(best, val); alpha = Math.max(alpha, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  } else {
+    let best = Infinity;
+    for (const idx of empties) {
+      const [nb] = applyMove(board, idx, humanPlayer, mc + depth);
+      const val = minimax(nb, depth+1, true, aiPlayer, humanPlayer, mc, alpha, beta, maxDepth);
+      best = Math.min(best, val); beta = Math.min(beta, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  }
+}
+
+function getBotMove(board, aiPlayer, difficulty, mc) {
+  const humanPlayer = aiPlayer === "X" ? "O" : "X";
+  const empties = getEmptyCells(board);
+  if (empties.length === 0) return null;
+  if (difficulty === "easy"   && Math.random() < 0.8) return empties[Math.floor(Math.random()*empties.length)];
+  if (difficulty === "medium" && Math.random() < 0.4) return empties[Math.floor(Math.random()*empties.length)];
+  const maxDepth = difficulty === "hard" ? 7 : 3;
+  let bestVal = -Infinity, bestMove = empties[0];
+  for (const idx of empties) {
+    const [nb] = applyMove(board, idx, aiPlayer, mc);
+    const val = minimax(nb, 1, false, aiPlayer, humanPlayer, mc, -Infinity, Infinity, maxDepth);
+    if (val > bestVal) { bestVal = val; bestMove = idx; }
+  }
+  return bestMove;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THEME
+// ─────────────────────────────────────────────────────────────────────────────
+function getTheme(dark) {
+  return dark ? {
+    bg:        "#0f0f13",
+    surface:   "#1a1a22",
+    border:    "#2a2a35",
+    text:      "#e8e8e8",
+    textDim:   "#888",
+    textFaint: "#555",
+    hover:     "#23232e",
+    menuBg:    "#16161e",
+  } : {
+    bg:        "#f0f0f0",
+    surface:   "#ffffff",
+    border:    "#c8c8d4",
+    text:      "#0d0d14",
+    textDim:   "#333",
+    textFaint: "#666",
+    hover:     "#e0e0ec",
+    menuBg:    "#e4e4ec",
+  };
+}
+
+const CLR = { X: "#ff6b6b", O: "#74b9ff" };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MENU COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+function Menu({ dark, onToggleDark, theme }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handler(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={menuRef} style={{ position: "relative", zIndex: 100 }}>
+      {/* Hamburger button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: open ? (dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)") : "transparent",
+          border: `2px solid ${open ? (dark ? "#555" : "#bbb") : "transparent"}`,
+          borderRadius: "8px",
+          cursor: "pointer",
+          padding: "6px 8px",
+          display: "flex", flexDirection: "column", gap: "4px",
+          transition: "all 0.2s",
+        }}
+        aria-label="Menu"
+      >
+        {[0,1,2].map(i => (
+          <div key={i} style={{
+            width: "18px", height: "2px",
+            background: theme.textDim,
+            borderRadius: "2px",
+            transition: "all 0.2s",
+            transform: open
+              ? i === 0 ? "translateY(6px) rotate(45deg)"
+              : i === 2 ? "translateY(-6px) rotate(-45deg)"
+              : "scaleX(0)"
+              : "none",
+            opacity: open && i === 1 ? 0 : 1,
+          }} />
+        ))}
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 8px)", right: 0,
+          background: theme.menuBg,
+          border: `1px solid ${theme.border}`,
+          borderRadius: "12px",
+          minWidth: "200px",
+          boxShadow: dark ? "0 8px 32px rgba(0,0,0,0.5)" : "0 8px 32px rgba(0,0,0,0.12)",
+          overflow: "hidden",
+          animation: "fadeSlideDown 0.15s ease",
+        }}>
+          <style>{`@keyframes fadeSlideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }`}</style>
+
+          {/* Section label */}
+          <div style={{ padding: "10px 16px 6px", fontSize: "9px", letterSpacing: "0.25em", color: theme.textFaint, textTransform: "uppercase", fontFamily: "'Courier New', monospace" }}>
+            Settings
+          </div>
+
+          {/* Light / Dark toggle */}
+          <div
+            onClick={() => { onToggleDark(); }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "10px 16px",
+              cursor: "pointer",
+              transition: "background 0.15s",
+              fontFamily: "'Courier New', monospace",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span style={{ fontSize: "15px" }}>{dark ? "🌙" : "☀️"}</span>
+              <span style={{ fontSize: "13px", color: theme.text }}>{dark ? "Dark mode" : "Light mode"}</span>
+            </div>
+            {/* pill toggle */}
+            <div style={{
+              width: "36px", height: "20px", borderRadius: "10px",
+              background: dark ? "#4a4a60" : "#b0b0c4",
+              position: "relative", transition: "background 0.2s",
+            }}>
+              <div style={{
+                position: "absolute", top: "3px",
+                left: dark ? "19px" : "3px",
+                width: "14px", height: "14px",
+                borderRadius: "50%",
+                background: dark ? "#aaa" : "#fff",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                transition: "left 0.2s",
+              }} />
+            </div>
+          </div>
+
+          {/* Divider — more items can go below here */}
+          <div style={{ height: "1px", background: theme.border, margin: "0 12px" }} />
+          <div style={{ padding: "8px 16px 10px", fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, fontFamily: "'Courier New', monospace", fontStyle: "italic" }}>
+            more coming soon
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED BUTTON STYLE
+// ─────────────────────────────────────────────────────────────────────────────
+function mkBtn(active, theme) {
+  return {
+    background: active ? (theme.bg === "#0f0f13" ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)") : "transparent",
+    border: `2px solid ${active ? (theme.bg === "#0f0f13" ? "#666" : "#bbb") : theme.border}`,
+    borderRadius: "10px",
+    color: active ? theme.text : theme.textDim,
+    padding: "10px 20px",
+    fontSize: "13px",
+    letterSpacing: "0.12em",
+    cursor: "pointer",
+    fontFamily: "'Courier New', monospace",
+    textTransform: "uppercase",
+    transition: "all 0.2s",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function HomeScreen({ onStart, dark, onToggleDark }) {
+  const [mode, setMode] = useState(null);
+  const [difficulty, setDifficulty] = useState("medium");
+  const theme = getTheme(dark);
+
+  const difficultyInfo = {
+    easy:   { emoji: "😌", desc: "Great for beginners" },
+    medium: { emoji: "🤔", desc: "A decent challenge" },
+    hard:   { emoji: "😈", desc: "Good luck." },
+  };
+
+  return (
+    <div style={{
+      height: "100vh", background: theme.bg, color: theme.text,
+      fontFamily: "'Courier New', monospace",
+      display: "flex", flexDirection: "column",
+      overflow: "hidden",
+      position: "relative",
+    }}>
+      {/* Menu */}
+      <div style={{ position: "absolute", top: "16px", right: "16px", zIndex: 10 }}>
+        <Menu dark={dark} onToggleDark={onToggleDark} theme={theme} />
+      </div>
+
+      {/* Hero */}
+      <div style={{
+        background: "transparent",
+        padding: "44px 24px 28px",
+        textAlign: "center",
+        borderBottom: `1px solid ${theme.border}`,
+        flexShrink: 0,
+      }}>
+        {/* Decorative mini board */}
+        <div style={{ display: "inline-grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px", marginBottom: "16px" }}>
+          {DEMO_TILES.map((v, i) => (
+            <div key={i} style={{
+              width: "18px", height: "18px", borderRadius: "4px",
+              background: theme.surface, border: `1px solid ${theme.border}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "9px", fontWeight: "900",
+              color: v === "X" ? CLR.X : CLR.O,
+            }}>{v}</div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: "10px", letterSpacing: "0.4em", color: theme.textDim, marginBottom: "6px" }}>
+          INFINITE
+        </div>
+        <h1 style={{
+          fontSize: "clamp(36px, 9vw, 60px)", fontWeight: "900",
+          margin: "0 0 10px", letterSpacing: "-0.03em", color: theme.text,
+          lineHeight: 1,
+        }}>
+          Tic Tac Toe
+        </h1>
+        <div style={{
+          display: "inline-block",
+          background: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
+          border: `1px solid ${theme.border}`,
+          borderRadius: "20px",
+          padding: "5px 14px",
+          fontSize: "11px", color: theme.textDim, letterSpacing: "0.06em",
+        }}>
+          3 marks each · oldest fades away
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, padding: "20px 20px 16px", display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+
+        {/* Mode label */}
+        <div style={{ alignSelf: "flex-start", fontSize: "11px", letterSpacing: "0.2em", color: theme.textDim, marginBottom: "10px", textTransform: "uppercase", fontWeight: "700" }}>
+          Choose a mode
+        </div>
+
+        {/* Mode cards */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", marginBottom: "16px" }}>
+          {[
+            { id: "versus", emoji: "👥", title: "Versus", sub: "Pass & play with a friend on the same device", accent: "#a78bfa" },
+            { id: "bot",    emoji: "🤖", title: "vs Bot", sub: "Challenge the AI at your chosen difficulty",  accent: "#34d399" },
+          ].map(({ id, emoji, title, sub, accent }) => {
+            const selected = mode === id;
+            return (
+              <button key={id} onClick={() => setMode(id)} style={{
+                width: "100%",
+                background: selected ? (dark ? `${accent}18` : `${accent}22`) : theme.surface,
+                border: `2px solid ${selected ? accent : theme.border}`,
+                borderRadius: "14px", padding: "14px 16px",
+                cursor: "pointer", textAlign: "left", transition: "all 0.2s",
+                display: "flex", alignItems: "center", gap: "14px",
+              }}>
+                <div style={{
+                  width: "42px", height: "42px", borderRadius: "12px", flexShrink: 0,
+                  background: selected ? `${accent}30` : (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"),
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: "20px", transition: "background 0.2s",
+                }}>{emoji}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: "15px", fontWeight: "800", color: selected ? accent : theme.text, marginBottom: "2px", fontFamily: "'Courier New', monospace" }}>{title}</div>
+                  <div style={{ fontSize: "11px", color: theme.textDim, lineHeight: 1.4, fontFamily: "'Courier New', monospace" }}>{sub}</div>
+                </div>
+                <div style={{
+                  width: "20px", height: "20px", borderRadius: "50%", flexShrink: 0,
+                  background: selected ? accent : "transparent",
+                  border: `2px solid ${selected ? accent : theme.border}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.2s",
+                }}>
+                  {selected && <div style={{ color: "#fff", fontSize: "11px", fontWeight: "900" }}>✓</div>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Difficulty — expands when bot selected */}
+        <div style={{
+          width: "100%", marginBottom: "16px",
+          maxHeight: mode === "bot" ? "300px" : "0px",
+          overflow: "hidden",
+          transition: "max-height 0.35s ease",
+        }}>
+          <div style={{ fontSize: "11px", letterSpacing: "0.2em", color: theme.textDim, marginBottom: "8px", textTransform: "uppercase", fontWeight: "700" }}>
+            Difficulty
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {["easy","medium","hard"].map(d => {
+              const selected = difficulty === d;
+              const { emoji, desc } = difficultyInfo[d];
+              return (
+                <button key={d} onClick={() => setDifficulty(d)} style={{
+                  width: "100%",
+                  background: selected ? (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)") : "transparent",
+                  border: `2px solid ${selected ? (dark ? "#666" : "#888") : theme.border}`,
+                  borderRadius: "10px", padding: "10px 14px",
+                  cursor: "pointer", display: "flex", alignItems: "center", gap: "10px",
+                  transition: "all 0.15s", fontFamily: "'Courier New', monospace",
+                }}>
+                  <span style={{ fontSize: "16px" }}>{emoji}</span>
+                  <div style={{ flex: 1, textAlign: "left" }}>
+                    <span style={{ fontSize: "13px", fontWeight: "700", color: theme.text, textTransform: "capitalize" }}>{d}</span>
+                    <span style={{ fontSize: "11px", color: theme.textDim, marginLeft: "8px" }}>{desc}</span>
+                  </div>
+                  {selected && <div style={{ fontSize: "13px", color: theme.textDim }}>✓</div>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Play button */}
+        <button
+          onClick={() => mode && onStart({ mode, difficulty })}
+          style={{
+            width: "100%",
+            background: mode
+              ? (mode === "versus" ? "linear-gradient(135deg, #a78bfa, #818cf8)" : "linear-gradient(135deg, #34d399, #059669)")
+              : (dark ? "#1f1f28" : "#ddd"),
+            border: "none", borderRadius: "14px",
+            color: mode ? "#fff" : theme.textFaint,
+            padding: "16px", fontSize: "15px", fontWeight: "900",
+            letterSpacing: "0.15em", cursor: mode ? "pointer" : "default",
+            fontFamily: "'Courier New', monospace", textTransform: "uppercase",
+            transition: "all 0.3s",
+            boxShadow: mode ? (dark ? "0 8px 24px rgba(0,0,0,0.4)" : "0 8px 24px rgba(0,0,0,0.15)") : "none",
+            flexShrink: 0,
+          }}
+        >
+          {mode ? `Play ${mode === "versus" ? "Versus" : "vs Bot"} →` : "Select a mode"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GAME SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function GameScreen({ config, onHome, dark, onToggleDark }) {
+  const { mode, difficulty } = config;
+  const isBot = mode === "bot";
+  const BOT = "O", HUMAN = "X";
+  const theme = getTheme(dark);
+  const btn = (active) => mkBtn(active, theme);
+
+  const [board, setBoard]             = useState(Array(9).fill(null));
+  const [turn, setTurn]               = useState("X");
+  const [moveCount, setMoveCount]     = useState(0);
+  const [winner, setWinner]           = useState(null);
+  const [winLine, setWinLine]         = useState(null);
+  const [scores, setScores]           = useState({ X: 0, O: 0 });
+  const [vanishIdx, setVanishIdx]     = useState(null);
+  const [botThinking, setBotThinking] = useState(false);
+
+  const stateRef = useRef({ board, moveCount });
+  useEffect(() => { stateRef.current = { board, moveCount }; }, [board, moveCount]);
+
+  function doMove(currentBoard, idx, player, mc) {
+    const [newBoard, removed] = applyMove(currentBoard, idx, player, mc + 1);
+    if (removed !== null) { setVanishIdx(removed); setTimeout(() => setVanishIdx(null), 450); }
+    const result = checkWinner(newBoard);
+    if (result) { setWinner(result.player); setWinLine(result.line); setScores(s => ({ ...s, [result.player]: s[result.player] + 1 })); }
+    setBoard(newBoard); setMoveCount(mc + 1); setTurn(player === "X" ? "O" : "X");
+    return result;
+  }
+
+  function handleClick(idx) {
+    if (winner || board[idx] || botThinking) return;
+    if (isBot && turn === BOT) return;
+    doMove(board, idx, turn, moveCount);
+  }
+
+  useEffect(() => {
+    if (!isBot || turn !== BOT || winner) return;
+    setBotThinking(true);
+    const delay = difficulty === "hard" ? 650 : difficulty === "medium" ? 450 : 300;
+    const timer = setTimeout(() => {
+      const { board: b, moveCount: mc } = stateRef.current;
+      const move = getBotMove(b, BOT, difficulty, mc);
+      if (move !== null) doMove(b, move, BOT, mc);
+      setBotThinking(false);
+    }, delay);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turn, winner]);
+
+  function reset() {
+    setBoard(Array(9).fill(null)); setTurn("X"); setMoveCount(0);
+    setWinner(null); setWinLine(null); setVanishIdx(null); setBotThinking(false);
+  }
+
+  const label = (p) => (!isBot ? p : p === HUMAN ? "You" : "Bot");
+
+  function getFadedIdx(player) {
+    const moves = getPlayerMoves(board, player);
+    return moves.length === MAX_MARKS ? moves[0].i : null;
+  }
+  const xFaded = getFadedIdx("X");
+  const oFaded = getFadedIdx("O");
+
+  const statusMsg = () => {
+    if (winner || botThinking) return null;
+    const faded = turn === "X" ? xFaded : oFaded;
+    if (faded !== null) return `placing removes ${label(turn) === "You" ? "your" : `${label(turn)}'s`} oldest mark`;
+    return null;
+  };
+
+  // ── board grid ──
+  const boardGrid = (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px" }}>
+      {board.map((cell, idx) => {
+        const isWin     = winLine?.includes(idx);
+        const isFaded   = idx === xFaded || idx === oFaded;
+        const isVanish  = idx === vanishIdx;
+        const cellColor = cell?.player === "X" ? CLR.X : CLR.O;
+        const clickable = !winner && !cell && !botThinking && !(isBot && turn === BOT);
+        return (
+          <button key={idx} onClick={() => handleClick(idx)} style={{
+            width: "clamp(84px, 22vw, 108px)", height: "clamp(84px, 22vw, 108px)",
+            background: isWin
+              ? (cell?.player === "X" ? "rgba(255,107,107,0.13)" : "rgba(116,185,255,0.13)")
+              : theme.surface,
+            border: `2px solid ${isWin ? cellColor : theme.border}`,
+            borderRadius: "12px",
+            cursor: clickable ? "pointer" : "default",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "clamp(30px, 8vw, 44px)", fontWeight: "900",
+            color: cell ? (isFaded ? `${cellColor}3a` : isWin ? cellColor : `${cellColor}cc`) : "transparent",
+            transition: "background 0.15s, color 0.2s, transform 0.3s, opacity 0.3s, box-shadow 0.2s",
+            transform: isVanish ? "scale(0.4)" : "scale(1)",
+            opacity: isVanish ? 0 : 1,
+            outline: "none",
+            boxShadow: isWin ? `0 0 22px ${cellColor}44` : "none",
+          }}
+            onMouseEnter={e => { if (clickable) e.currentTarget.style.background = theme.hover; }}
+            onMouseLeave={e => { if (!isWin) e.currentTarget.style.background = theme.surface; }}
+          >
+            {cell?.player ?? ""}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  // ── versus panel content ──
+  const versusPanel = (p) => {
+    const color = p === "X" ? CLR.X : CLR.O;
+    const isActive = !winner && turn === p;
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+            <div style={{ fontSize: "34px", fontWeight: "900", color, transition: "opacity 0.3s" }}>{p}</div>
+            <div style={{ fontSize: "34px", fontWeight: "900", color: theme.text }}>{scores[p]}</div>
+          </div>
+          <div style={{ fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: winner === p ? color : isActive ? theme.textDim : theme.textFaint, fontWeight: isActive || winner === p ? "700" : "400", transition: "color 0.3s" }}>
+            {winner === p ? "🏆 wins!" : isActive ? "your turn" : "waiting"}
+          </div>
+        </div>
+        {winner === p && (
+          <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+            <button onClick={reset}  style={{ ...btn(false), padding: "8px 18px", fontSize: "11px" }}>Play again</button>
+            <button onClick={onHome} style={{ ...btn(false), padding: "8px 18px", fontSize: "11px" }}>Home</button>
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // ════════════════════════════════
+  // VERSUS — split 180° layout
+  // ════════════════════════════════
+  if (!isBot) return (
+    <div style={{
+      height: "100vh", background: theme.bg, color: theme.text,
+      fontFamily: "'Courier New', monospace",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "space-between",
+      overflow: "hidden",
+    }}>
+      {/* O — top, rotated 180° */}
+      <div style={{
+        width: "100%", padding: "16px 20px", boxSizing: "border-box",
+        borderBottom: `1px solid ${theme.border}`,
+        background: !winner && turn === "O" ? "rgba(116,185,255,0.05)" : "transparent",
+        transition: "background 0.4s",
+        transform: "rotate(180deg)",
+        display: "flex", flexDirection: "column", alignItems: "flex-start",
+        position: "relative",
+      }}>
+        {versusPanel("O")}
+      </div>
+
+      {/* Board — centre */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px", padding: "10px 0", position: "relative" }}>
+        {boardGrid}
+        <button onClick={onHome} style={{ ...btn(false), padding: "5px 16px", fontSize: "10px" }}>← Home</button>
+      </div>
+
+      {/* X — bottom, normal */}
+      <div style={{
+        width: "100%", padding: "16px 20px", boxSizing: "border-box",
+        borderTop: `1px solid ${theme.border}`,
+        background: !winner && turn === "X" ? "rgba(255,107,107,0.05)" : "transparent",
+        transition: "background 0.4s",
+        display: "flex", flexDirection: "column", alignItems: "flex-start",
+      }}>
+        {versusPanel("X")}
+      </div>
+    </div>
+  );
+
+  // ════════════════════════════════
+  // BOT — centred layout
+  // ════════════════════════════════
+  return (
+    <div style={{
+      minHeight: "100vh", background: theme.bg, color: theme.text,
+      fontFamily: "'Courier New', monospace",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", padding: "24px",
+      position: "relative",
+    }}>
+      {/* Scoreboard */}
+      <div style={{ display: "flex", gap: "48px", marginBottom: "32px", alignItems: "center" }}>
+        {["X","O"].map(p => (
+          <div key={p} style={{ textAlign: "center", minWidth: "60px" }}>
+            <div style={{ fontSize: "11px", letterSpacing: "0.2em", color: p === "X" ? CLR.X : CLR.O, transition: "opacity 0.3s", marginBottom: "2px" }}>
+              {label(p).toUpperCase()}
+            </div>
+            <div style={{ fontSize: "32px", fontWeight: "900", lineHeight: 1, color: theme.text }}>{scores[p]}</div>
+            <div style={{ fontSize: "8px", letterSpacing: "0.2em", color: theme.textFaint, marginTop: "3px", minHeight: "12px" }}>
+              {!winner && turn === p ? (botThinking ? "THINKING…" : "YOUR TURN") : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Board */}
+      <div style={{ marginBottom: "28px" }}>{boardGrid}</div>
+
+      {/* Status / win + buttons */}
+      <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "14px" }}>
+        {winner ? (
+          <>
+            <div style={{ fontSize: "clamp(18px, 4vw, 24px)", fontWeight: "900", color: winner === "X" ? CLR.X : CLR.O, letterSpacing: "0.05em" }}>
+              {label(winner)} wins!
+            </div>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button onClick={reset}  style={{ ...btn(false), padding: "10px 24px" }}>Play again</button>
+              <button onClick={onHome} style={{ ...btn(false), padding: "10px 24px" }}>Home</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: "12px", color: theme.textDim, letterSpacing: "0.08em", minHeight: "18px" }}>
+              {botThinking ? "bot is thinking…" : (statusMsg() ?? "\u00a0")}
+            </div>
+            <button onClick={onHome} style={{ ...btn(false), padding: "7px 20px", fontSize: "11px" }}>← Home</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GLOBAL STYLES
+// ─────────────────────────────────────────────────────────────────────────────
+const GLOBAL_STYLES = `
+  @keyframes tileIn {
+    from { opacity: 0; transform: scale(0.5) rotate(-10deg); }
+    to   { opacity: 1; transform: scale(1)   rotate(0deg);  }
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn  { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes screenIn {
+    from { opacity: 0; transform: translateY(18px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeSlideDown {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes dotsIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+`;
+
+const DEMO_TILES = ["X","","O","","X","","O","","X"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPLASH SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function SplashScreen() {
+  const [dotsCount, setDotsCount] = useState(1);
+  useEffect(() => {
+    const t = setInterval(() => setDotsCount(d => (d % 3) + 1), 400);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div style={{
+      height: "100vh", background: "#0f0f13",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      fontFamily: "'Courier New', monospace", gap: "28px",
+    }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
+        {DEMO_TILES.map((v, i) => (
+          <div key={i} style={{
+            width: "56px", height: "56px", borderRadius: "11px",
+            background: "#1a1a22", border: "2px solid #2a2a35",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "24px", fontWeight: "900",
+            color: v === "X" ? CLR.X : CLR.O,
+            animation: `tileIn 0.38s cubic-bezier(0.34,1.56,0.64,1) ${i * 60}ms both`,
+          }}>{v}</div>
+        ))}
+      </div>
+      <div style={{ textAlign: "center", animation: "fadeInUp 0.5s ease 650ms both" }}>
+        <div style={{ fontSize: "10px", letterSpacing: "0.4em", color: "#555", marginBottom: "6px" }}>INFINITE</div>
+        <div style={{ fontSize: "26px", fontWeight: "900", color: "#fff", letterSpacing: "-0.02em" }}>Tic Tac Toe</div>
+      </div>
+      <div style={{ color: "#444", fontSize: "13px", letterSpacing: "0.2em", animation: "fadeInUp 0.5s ease 850ms both" }}>
+        Loading{"·".repeat(dotsCount)}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRE-GAME SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function PreGameScreen({ config, dark }) {
+  const [dotsCount, setDotsCount] = useState(1);
+  useEffect(() => {
+    const t = setInterval(() => setDotsCount(d => (d % 3) + 1), 350);
+    return () => clearInterval(t);
+  }, []);
+
+  const label = config?.mode === "versus" ? "Versus" : `Bot · ${config?.difficulty}`;
+
+  return (
+    <div style={{
+      height: "100vh", background: dark ? "#0f0f13" : "#f0f0f0",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      fontFamily: "'Courier New', monospace", gap: "28px",
+      animation: "fadeIn 0.2s ease both",
+    }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
+        {DEMO_TILES.map((v, i) => (
+          <div key={i} style={{
+            width: "56px", height: "56px", borderRadius: "11px",
+            background: dark ? "#1a1a22" : "#fff",
+            border: `2px solid ${dark ? "#2a2a35" : "#d0d0d8"}`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "24px", fontWeight: "900",
+            color: v === "X" ? CLR.X : CLR.O,
+            animation: `tileIn 0.38s cubic-bezier(0.34,1.56,0.64,1) ${i * 50}ms both`,
+          }}>{v}</div>
+        ))}
+      </div>
+      <div style={{ textAlign: "center", animation: "dotsIn 0.4s ease 550ms both" }}>
+        <div style={{ fontSize: "10px", letterSpacing: "0.4em", color: dark ? "#555" : "#aaa", marginBottom: "6px" }}>STARTING</div>
+        <div style={{ fontSize: "22px", fontWeight: "900", color: dark ? "#fff" : "#111", letterSpacing: "-0.01em" }}>{label}</div>
+      </div>
+      <div style={{ color: dark ? "#444" : "#bbb", fontSize: "18px", letterSpacing: "0.35em", animation: "dotsIn 0.4s ease 700ms both" }}>
+        {"·".repeat(dotsCount)}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT
+// ─────────────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [screen, setScreen] = useState("splash"); // splash | home | pregame | game
+  const [config, setConfig] = useState(null);
+  const [dark, setDark]     = useState(true);
+  const toggleDark = () => setDark(d => !d);
+
+  // Splash → home
+  useEffect(() => {
+    if (screen !== "splash") return;
+    const t = setTimeout(() => setScreen("home"), 2200);
+    return () => clearTimeout(t);
+  }, [screen]);
+
+  function handleStart(cfg) {
+    setConfig(cfg);
+    setScreen("pregame");
+    setTimeout(() => setScreen("game"), 2000);
+  }
+
+  function handleHome() {
+    setConfig(null);
+    setScreen("home");
+  }
+
+  if (screen === "splash") return (
+    <><style>{GLOBAL_STYLES}</style><SplashScreen /></>
+  );
+
+  if (screen === "pregame") return (
+    <><style>{GLOBAL_STYLES}</style><PreGameScreen config={config} dark={dark} /></>
+  );
+
+  if (screen === "game" && config) return (
+    <>
+      <style>{GLOBAL_STYLES}</style>
+      <div style={{ animation: "screenIn 0.4s ease both" }}>
+        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} />
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      <style>{GLOBAL_STYLES}</style>
+      <div style={{ animation: "screenIn 0.45s ease both" }}>
+        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} />
+      </div>
+    </>
+  );
+}
