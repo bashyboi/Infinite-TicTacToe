@@ -457,7 +457,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 
   return (
     <div style={{
-      height: "100dvh", background: theme.bg, color: theme.text,
+      height: "100%", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
       overflow: "hidden",
