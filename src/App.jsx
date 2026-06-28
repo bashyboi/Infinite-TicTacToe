@@ -79,9 +79,33 @@ function getBotMove(board, aiPlayer, difficulty, mc) {
   const humanPlayer = aiPlayer === "X" ? "O" : "X";
   const empties = getEmptyCells(board);
   if (empties.length === 0) return null;
-  if (difficulty === "easy"   && Math.random() < 0.8) return empties[Math.floor(Math.random()*empties.length)];
-  if (difficulty === "medium" && Math.random() < 0.4) return empties[Math.floor(Math.random()*empties.length)];
-  const maxDepth = difficulty === "hard" ? 7 : 3;
+
+  // Random-move chance per difficulty (chance the bot just plays a random cell)
+  // easy: very random, medium: somewhat, hard: noticeable slips, impossible: never
+  const randomChance = {
+    easy:       0.75,
+    medium:     0.45,
+    hard:       0.22,   // gives the player occasional openings
+    impossible: 0,      // always optimal
+  }[difficulty] ?? 0.45;
+
+  if (randomChance > 0 && Math.random() < randomChance) {
+    return empties[Math.floor(Math.random() * empties.length)];
+  }
+
+  // Search depth per difficulty — deeper = stronger/more foresight
+  let maxDepth = {
+    easy:       2,
+    medium:     4,
+    hard:       6,
+    impossible: 10,
+  }[difficulty] ?? 4;
+
+  // Cap depth early ONLY for non-impossible, to keep them snappy.
+  // Impossible always searches deep so it sees long-term forced wins
+  // that hard/medium will miss — this is the real difference-maker.
+  if (difficulty !== "impossible" && empties.length >= 8 && maxDepth > 6) maxDepth = 6;
+
   let bestVal = -Infinity, bestMove = empties[0];
   for (const idx of empties) {
     const [nb] = applyMove(board, idx, aiPlayer, mc);
@@ -224,7 +248,7 @@ function AboutModal({ dark, onClose, theme }) {
 
         <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint, marginBottom: "4px" }}>INFINITE</div>
         <div style={{ fontSize: "26px", fontWeight: "900", color: theme.text, letterSpacing: "-0.02em", marginBottom: "4px" }}>Tic Tac Toe</div>
-        <div style={{ fontSize: "11px", color: theme.textFaint, marginBottom: "24px" }}>Version 1.0.47</div>
+        <div style={{ fontSize: "11px", color: theme.textFaint, marginBottom: "24px" }}>Version 1.0.50</div>
 
         <div style={{ height: "1px", background: theme.border, marginBottom: "20px" }} />
 
@@ -425,9 +449,10 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
   const theme = getTheme(dark);
 
   const difficultyInfo = {
-    easy:   { emoji: "😌", desc: "Great for beginners" },
-    medium: { emoji: "🤔", desc: "A decent challenge" },
-    hard:   { emoji: "😈", desc: "Good luck." },
+    easy:       { emoji: "😌", desc: "Great for beginners" },
+    medium:     { emoji: "🤔", desc: "A decent challenge" },
+    hard:       { emoji: "😈", desc: "A serious challenge" },
+    impossible: { emoji: "💀", desc: "You cannot win" },
   };
 
   return (
@@ -446,13 +471,13 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
       {/* Hero */}
       <div style={{
         background: "transparent",
-        padding: "44px 24px 28px",
+        padding: "32px 24px 20px",
         textAlign: "center",
         borderBottom: `1px solid ${theme.border}`,
         flexShrink: 0,
       }}>
         {/* Decorative mini board */}
-        <div style={{ display: "inline-grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px", marginBottom: "16px" }}>
+        <div style={{ display: "inline-grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px", marginBottom: "12px" }}>
           {DEMO_TILES.map((v, i) => (
             <div key={i} style={{
               width: "18px", height: "18px", borderRadius: "4px",
@@ -469,25 +494,15 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
         </div>
         <h1 style={{
           fontSize: "clamp(36px, 9vw, 60px)", fontWeight: "900",
-          margin: "0 0 10px", letterSpacing: "-0.03em", color: theme.text,
+          margin: "0", letterSpacing: "-0.03em", color: theme.text,
           lineHeight: 1,
         }}>
           Tic Tac Toe
         </h1>
-        <div style={{
-          display: "inline-block",
-          background: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
-          border: `1px solid ${theme.border}`,
-          borderRadius: "20px",
-          padding: "5px 14px",
-          fontSize: "11px", color: theme.textDim, letterSpacing: "0.06em",
-        }}>
-          3 marks each · oldest fades away
-        </div>
       </div>
 
-      {/* Content */}
-      <div style={{ flex: 1, padding: "20px 20px 16px", display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+      {/* Content — scrollable middle */}
+      <div style={{ flex: 1, padding: "20px 20px 8px", display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", margin: "0 auto", width: "100%", boxSizing: "border-box", overflowY: "auto", minHeight: 0 }}>
 
         {/* Mode label */}
         <div style={{ alignSelf: "flex-start", fontSize: "11px", letterSpacing: "0.2em", color: theme.textDim, marginBottom: "10px", textTransform: "uppercase", fontWeight: "700" }}>
@@ -497,8 +512,8 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
         {/* Mode cards */}
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", marginBottom: "16px" }}>
           {[
-            { id: "versus", emoji: "👥", title: "Versus", sub: "Pass & play with a friend on the same device", accent: "#a78bfa" },
-            { id: "bot",    emoji: "🤖", title: "vs Bot", sub: "Challenge the AI at your chosen difficulty",  accent: "#34d399" },
+            { id: "versus", emoji: "👥", title: "Versus", sub: "Pass & play with a friend", accent: "#a78bfa" },
+            { id: "bot",    emoji: "🤖", title: "vs Bot", sub: "Challenge the AI",  accent: "#34d399" },
           ].map(({ id, emoji, title, sub, accent }) => {
             const selected = mode === id;
             return (
@@ -506,18 +521,18 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
                 width: "100%",
                 background: selected ? (dark ? `${accent}18` : `${accent}22`) : theme.surface,
                 border: `2px solid ${selected ? accent : theme.border}`,
-                borderRadius: "14px", padding: "14px 16px",
+                borderRadius: "14px", padding: "12px 16px",
                 cursor: "pointer", textAlign: "left", transition: "all 0.2s",
                 display: "flex", alignItems: "center", gap: "14px",
               }}>
                 <div style={{
-                  width: "42px", height: "42px", borderRadius: "12px", flexShrink: 0,
+                  width: "40px", height: "40px", borderRadius: "12px", flexShrink: 0,
                   background: selected ? `${accent}30` : (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"),
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: "20px", transition: "background 0.2s",
                 }}>{emoji}</div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "15px", fontWeight: "800", color: selected ? accent : theme.text, marginBottom: "2px", fontFamily: "'Courier New', monospace" }}>{title}</div>
+                  <div style={{ fontSize: "15px", fontWeight: "800", color: selected ? accent : theme.text, marginBottom: "1px", fontFamily: "'Courier New', monospace" }}>{title}</div>
                   <div style={{ fontSize: "11px", color: theme.textDim, lineHeight: 1.4, fontFamily: "'Courier New', monospace" }}>{sub}</div>
                 </div>
                 <div style={{
@@ -536,8 +551,8 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 
         {/* Difficulty — expands when bot selected */}
         <div style={{
-          width: "100%", marginBottom: "16px",
-          maxHeight: mode === "bot" ? "300px" : "0px",
+          width: "100%",
+          maxHeight: mode === "bot" ? "400px" : "0px",
           overflow: "hidden",
           transition: "max-height 0.35s ease",
         }}>
@@ -545,7 +560,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
             Difficulty
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            {["easy","medium","hard"].map(d => {
+            {["easy","medium","hard","impossible"].map(d => {
               const selected = difficulty === d;
               const { emoji, desc } = difficultyInfo[d];
               return (
@@ -553,7 +568,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
                   width: "100%",
                   background: selected ? (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)") : "transparent",
                   border: `2px solid ${selected ? (dark ? "#666" : "#888") : theme.border}`,
-                  borderRadius: "10px", padding: "10px 14px",
+                  borderRadius: "10px", padding: "9px 14px",
                   cursor: "pointer", display: "flex", alignItems: "center", gap: "10px",
                   transition: "all 0.15s", fontFamily: "'Courier New', monospace",
                 }}>
@@ -568,8 +583,10 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
             })}
           </div>
         </div>
+      </div>
 
-        {/* Play button */}
+      {/* Play button — pinned at bottom */}
+      <div style={{ flexShrink: 0, padding: "12px 20px 20px", maxWidth: "420px", margin: "0 auto", width: "100%", boxSizing: "border-box", borderTop: `1px solid ${theme.border}` }}>
         <button
           onClick={() => mode && onStart({ mode, difficulty })}
           style={{
@@ -584,7 +601,6 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
             fontFamily: "'Courier New', monospace", textTransform: "uppercase",
             transition: "all 0.3s",
             boxShadow: mode ? (dark ? "0 8px 24px rgba(0,0,0,0.4)" : "0 8px 24px rgba(0,0,0,0.15)") : "none",
-            flexShrink: 0,
           }}
         >
           {mode ? `Play ${mode === "versus" ? "Versus" : "vs Bot"} →` : "Select a mode"}
@@ -640,7 +656,7 @@ function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHapti
   useEffect(() => {
     if (!isBot || turn !== BOT || winner) return;
     setBotThinking(true);
-    const delay = difficulty === "hard" ? 650 : difficulty === "medium" ? 450 : 300;
+    const delay = difficulty === "impossible" ? 750 : difficulty === "hard" ? 650 : difficulty === "medium" ? 450 : 300;
     const timer = setTimeout(() => {
       const { board: b, moveCount: mc } = stateRef.current;
       const move = getBotMove(b, BOT, difficulty, mc);
