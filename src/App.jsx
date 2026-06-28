@@ -129,6 +129,60 @@ function haptic(type = "light") {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SOUND EFFECTS (Web Audio — "pa-ta" two-tone blip, Among Us vote style)
+// ─────────────────────────────────────────────────────────────────────────────
+let _audioCtx = null;
+function getAudioCtx() {
+  if (typeof window === "undefined") return null;
+  if (!_audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    _audioCtx = new AC();
+  }
+  return _audioCtx;
+}
+
+// Play a single short tone with a soft attack/decay
+function playTone(ctx, freq, startTime, duration, volume, type = "sine") {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  // soft, rounded envelope — like a UI button
+  gain.gain.setValueAtTime(0, startTime);
+  gain.gain.linearRampToValueAtTime(volume, startTime + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(startTime);
+  osc.stop(startTime + duration);
+}
+
+// type: "place" | "vanish" | "win". volume 0..1
+function playSfx(type, volume = 0.5) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === "suspended") ctx.resume();
+  const now = ctx.currentTime;
+  const v = Math.max(0, Math.min(1, volume)) * 0.4;
+
+  if (type === "place") {
+    // soft rounded button "tock" — single warm note with a tiny pitch pop
+    playTone(ctx, 440, now, 0.07, v, "sine");
+    playTone(ctx, 660, now, 0.05, v * 0.5, "triangle");
+  } else if (type === "vanish") {
+    // softer, lower button release
+    playTone(ctx, 330, now, 0.09, v, "sine");
+    playTone(ctx, 247, now + 0.02, 0.07, v * 0.4, "triangle");
+  } else if (type === "win") {
+    // gentle rising 3-note chime
+    playTone(ctx, 523, now,        0.12, v, "sine");   // C
+    playTone(ctx, 659, now + 0.12, 0.12, v, "sine");   // E
+    playTone(ctx, 784, now + 0.24, 0.20, v, "sine");   // G
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ABOUT MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 function AboutModal({ dark, onClose, theme }) {
@@ -204,7 +258,7 @@ function AboutModal({ dark, onClose, theme }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MENU COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function Menu({ dark, onToggleDark, haptics, onToggleHaptics, theme }) {
+function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, theme }) {
   const [open, setOpen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const menuRef = useRef(null);
@@ -303,6 +357,32 @@ function Menu({ dark, onToggleDark, haptics, onToggleHaptics, theme }) {
             {sectionLabel("Settings")}
             {menuRow(dark ? "🌙" : "☀️", dark ? "Dark mode" : "Light mode", pill(dark), onToggleDark)}
             {menuRow("📳", "Haptic feedback", pill(haptics), onToggleHaptics)}
+
+            {/* SFX volume slider */}
+            <div style={{ padding: "10px 16px 12px", fontFamily: "'Courier New', monospace" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "15px" }}>{sfxVolume === 0 ? "🔇" : "🔊"}</span>
+                  <span style={{ fontSize: "13px", color: theme.text }}>Sound FX</span>
+                </div>
+                <span style={{ fontSize: "11px", color: theme.textFaint }}>{Math.round(sfxVolume * 100)}%</span>
+              </div>
+              <input
+                type="range" min="0" max="100" value={Math.round(sfxVolume * 100)}
+                onChange={e => {
+                  const v = Number(e.target.value) / 100;
+                  onSfxVolume(v);
+                }}
+                onMouseUp={() => sfxVolume > 0 && playSfx("place", sfxVolume)}
+                onTouchEnd={() => sfxVolume > 0 && playSfx("place", sfxVolume)}
+                style={{
+                  width: "100%",
+                  accentColor: CLR.O,
+                  cursor: "pointer",
+                }}
+              />
+            </div>
+
             {divider()}
             {sectionLabel("Info")}
             {menuRow("ℹ️", "About", null, () => { setShowAbout(true); setOpen(false); })}
@@ -339,7 +419,7 @@ function mkBtn(active, theme) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics }) {
+function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume }) {
   const [mode, setMode] = useState(null);
   const [difficulty, setDifficulty] = useState("medium");
   const theme = getTheme(dark);
@@ -360,7 +440,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics }) {
     }}>
       {/* Menu */}
       <div style={{ position: "absolute", top: "16px", right: "16px", zIndex: 10 }}>
-        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} theme={theme} />
+        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} sfxVolume={sfxVolume} onSfxVolume={onSfxVolume} theme={theme} />
       </div>
 
       {/* Hero */}
@@ -517,7 +597,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GAME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHaptics }) {
+function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume }) {
   const { mode, difficulty } = config;
   const isBot = mode === "bot";
   const BOT = "O", HUMAN = "X";
@@ -539,10 +619,12 @@ function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHapti
   function doMove(currentBoard, idx, player, mc) {
     const [newBoard, removed] = applyMove(currentBoard, idx, player, mc + 1);
     if (haptics) haptic(removed !== null ? "medium" : "light");
+    if (sfxVolume > 0) playSfx(removed !== null ? "vanish" : "place", sfxVolume);
     if (removed !== null) { setVanishIdx(removed); setTimeout(() => setVanishIdx(null), 450); }
     const result = checkWinner(newBoard);
     if (result) {
       if (haptics) haptic("win");
+      if (sfxVolume > 0) setTimeout(() => playSfx("win", sfxVolume), 120);
       setWinner(result.player); setWinLine(result.line); setScores(s => ({ ...s, [result.player]: s[result.player] + 1 }));
     }
     setBoard(newBoard); setMoveCount(mc + 1); setTurn(player === "X" ? "O" : "X");
@@ -882,6 +964,7 @@ export default function App() {
   const [config, setConfig] = useState(null);
   const [dark, setDark]     = useState(true);
   const [haptics, setHaptics] = useState(true);
+  const [sfxVolume, setSfxVolume] = useState(0.5);
   const toggleDark = () => setDark(d => !d);
   const toggleHaptics = () => setHaptics(h => !h);
 
@@ -915,7 +998,7 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.4s ease both" }}>
-        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} />
+        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} />
       </div>
     </>
   );
@@ -924,7 +1007,7 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.45s ease both" }}>
-        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} />
+        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} />
       </div>
     </>
   );
