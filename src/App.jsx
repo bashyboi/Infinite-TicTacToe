@@ -119,13 +119,96 @@ function getTheme(dark) {
 const CLR = { X: "#ff6b6b", O: "#74b9ff" };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// HAPTIC FEEDBACK
+// ─────────────────────────────────────────────────────────────────────────────
+function haptic(type = "light") {
+  if (!window.navigator?.vibrate) return;
+  if (type === "light")  navigator.vibrate(10);
+  if (type === "medium") navigator.vibrate(25);
+  if (type === "win")    navigator.vibrate([30, 50, 80]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ABOUT MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+function AboutModal({ dark, onClose, theme }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "24px",
+        animation: "fadeIn 0.2s ease both",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: theme.menuBg,
+          border: `1px solid ${theme.border}`,
+          borderRadius: "20px",
+          padding: "32px 28px",
+          maxWidth: "340px", width: "100%",
+          fontFamily: "'Courier New', monospace",
+          animation: "screenIn 0.25s ease both",
+        }}
+      >
+        {/* Mini board decoration */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px", marginBottom: "20px", width: "54px" }}>
+          {["X","","O","","X","","O","","X"].map((v, i) => (
+            <div key={i} style={{
+              width: "16px", height: "16px", borderRadius: "3px",
+              background: theme.surface, border: `1px solid ${theme.border}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "7px", fontWeight: "900",
+              color: v === "X" ? CLR.X : CLR.O,
+            }}>{v}</div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint, marginBottom: "4px" }}>INFINITE</div>
+        <div style={{ fontSize: "26px", fontWeight: "900", color: theme.text, letterSpacing: "-0.02em", marginBottom: "4px" }}>Tic Tac Toe</div>
+        <div style={{ fontSize: "11px", color: theme.textFaint, marginBottom: "24px" }}>Version 1.0.47</div>
+
+        <div style={{ height: "1px", background: theme.border, marginBottom: "20px" }} />
+
+        <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.7, marginBottom: "24px" }}>
+          A modern twist on a classic — each player has just 3 marks on the board at a time. Strategy meets memory.
+        </div>
+
+        <div style={{ fontSize: "10px", letterSpacing: "0.2em", color: theme.textFaint, marginBottom: "4px" }}>DEVELOPED BY</div>
+        <div style={{ fontSize: "16px", fontWeight: "800", color: theme.text, marginBottom: "20px" }}>Doorless Studios</div>
+
+        <button
+          onClick={onClose}
+          style={{
+            width: "100%", padding: "12px",
+            background: "transparent",
+            border: `2px solid ${theme.border}`,
+            borderRadius: "12px",
+            color: theme.textDim, fontSize: "12px",
+            letterSpacing: "0.15em", textTransform: "uppercase",
+            cursor: "pointer", fontFamily: "'Courier New', monospace",
+            transition: "all 0.2s",
+          }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MENU COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function Menu({ dark, onToggleDark, theme }) {
+function Menu({ dark, onToggleDark, haptics, onToggleHaptics, theme }) {
   const [open, setOpen] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const menuRef = useRef(null);
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     function handler(e) {
@@ -135,100 +218,102 @@ function Menu({ dark, onToggleDark, theme }) {
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  return (
-    <div ref={menuRef} style={{ position: "relative", zIndex: 100 }}>
-      {/* Hamburger button */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          background: open ? (dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)") : "transparent",
-          border: `2px solid ${open ? (dark ? "#555" : "#bbb") : "transparent"}`,
-          borderRadius: "8px",
-          cursor: "pointer",
-          padding: "6px 8px",
-          display: "flex", flexDirection: "column", gap: "4px",
-          transition: "all 0.2s",
-        }}
-        aria-label="Menu"
-      >
-        {[0,1,2].map(i => (
-          <div key={i} style={{
-            width: "18px", height: "2px",
-            background: theme.textDim,
-            borderRadius: "2px",
-            transition: "all 0.2s",
-            transform: open
-              ? i === 0 ? "translateY(6px) rotate(45deg)"
-              : i === 2 ? "translateY(-6px) rotate(-45deg)"
-              : "scaleX(0)"
-              : "none",
-            opacity: open && i === 1 ? 0 : 1,
-          }} />
-        ))}
-      </button>
-
-      {/* Dropdown */}
-      {open && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 8px)", right: 0,
-          background: theme.menuBg,
-          border: `1px solid ${theme.border}`,
-          borderRadius: "12px",
-          minWidth: "200px",
-          boxShadow: dark ? "0 8px 32px rgba(0,0,0,0.5)" : "0 8px 32px rgba(0,0,0,0.12)",
-          overflow: "hidden",
-          animation: "fadeSlideDown 0.15s ease",
-        }}>
-          <style>{`@keyframes fadeSlideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }`}</style>
-
-          {/* Section label */}
-          <div style={{ padding: "10px 16px 6px", fontSize: "9px", letterSpacing: "0.25em", color: theme.textFaint, textTransform: "uppercase", fontFamily: "'Courier New', monospace" }}>
-            Settings
-          </div>
-
-          {/* Light / Dark toggle */}
-          <div
-            onClick={() => { onToggleDark(); }}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "10px 16px",
-              cursor: "pointer",
-              transition: "background 0.15s",
-              fontFamily: "'Courier New', monospace",
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}
-            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <span style={{ fontSize: "15px" }}>{dark ? "🌙" : "☀️"}</span>
-              <span style={{ fontSize: "13px", color: theme.text }}>{dark ? "Dark mode" : "Light mode"}</span>
-            </div>
-            {/* pill toggle */}
-            <div style={{
-              width: "36px", height: "20px", borderRadius: "10px",
-              background: dark ? "#4a4a60" : "#b0b0c4",
-              position: "relative", transition: "background 0.2s",
-            }}>
-              <div style={{
-                position: "absolute", top: "3px",
-                left: dark ? "19px" : "3px",
-                width: "14px", height: "14px",
-                borderRadius: "50%",
-                background: dark ? "#aaa" : "#fff",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-                transition: "left 0.2s",
-              }} />
-            </div>
-          </div>
-
-          {/* Divider — more items can go below here */}
-          <div style={{ height: "1px", background: theme.border, margin: "0 12px" }} />
-          <div style={{ padding: "8px 16px 10px", fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, fontFamily: "'Courier New', monospace", fontStyle: "italic" }}>
-            more coming soon
-          </div>
-        </div>
-      )}
+  const menuRow = (emoji, label, right, onClick) => (
+    <div
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "10px 16px", cursor: "pointer", transition: "background 0.15s",
+        fontFamily: "'Courier New', monospace",
+      }}
+      onMouseEnter={e => e.currentTarget.style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}
+      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span style={{ fontSize: "15px" }}>{emoji}</span>
+        <span style={{ fontSize: "13px", color: theme.text }}>{label}</span>
+      </div>
+      {right}
     </div>
+  );
+
+  const pill = (active) => (
+    <div style={{
+      width: "36px", height: "20px", borderRadius: "10px",
+      background: active ? "#4a4a60" : (dark ? "#333" : "#b0b0c4"),
+      position: "relative", transition: "background 0.2s", flexShrink: 0,
+    }}>
+      <div style={{
+        position: "absolute", top: "3px",
+        left: active ? "19px" : "3px",
+        width: "14px", height: "14px", borderRadius: "50%",
+        background: active ? "#aaa" : "#fff",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+        transition: "left 0.2s",
+      }} />
+    </div>
+  );
+
+  const sectionLabel = (text) => (
+    <div style={{ padding: "10px 16px 4px", fontSize: "9px", letterSpacing: "0.25em", color: theme.textFaint, textTransform: "uppercase", fontFamily: "'Courier New', monospace" }}>
+      {text}
+    </div>
+  );
+
+  const divider = () => <div style={{ height: "1px", background: theme.border, margin: "4px 12px" }} />;
+
+  return (
+    <>
+      <div ref={menuRef} style={{ position: "relative", zIndex: 100 }}>
+        {/* Hamburger */}
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            background: open ? (dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)") : "transparent",
+            border: `2px solid ${open ? (dark ? "#555" : "#bbb") : "transparent"}`,
+            borderRadius: "8px", cursor: "pointer",
+            padding: "6px 8px", display: "flex", flexDirection: "column", gap: "4px",
+            transition: "all 0.2s",
+          }}
+          aria-label="Menu"
+        >
+          {[0,1,2].map(i => (
+            <div key={i} style={{
+              width: "18px", height: "2px", background: theme.textDim,
+              borderRadius: "2px", transition: "all 0.2s",
+              transform: open
+                ? i === 0 ? "translateY(6px) rotate(45deg)"
+                : i === 2 ? "translateY(-6px) rotate(-45deg)"
+                : "scaleX(0)"
+                : "none",
+              opacity: open && i === 1 ? 0 : 1,
+            }} />
+          ))}
+        </button>
+
+        {/* Dropdown */}
+        {open && (
+          <div style={{
+            position: "absolute", top: "calc(100% + 8px)", right: 0,
+            background: theme.menuBg, border: `1px solid ${theme.border}`,
+            borderRadius: "12px", minWidth: "220px",
+            boxShadow: dark ? "0 8px 32px rgba(0,0,0,0.5)" : "0 8px 32px rgba(0,0,0,0.12)",
+            overflow: "hidden", animation: "fadeSlideDown 0.15s ease",
+          }}>
+            {sectionLabel("Settings")}
+            {menuRow(dark ? "🌙" : "☀️", dark ? "Dark mode" : "Light mode", pill(dark), onToggleDark)}
+            {menuRow("📳", "Haptic feedback", pill(haptics), onToggleHaptics)}
+            {divider()}
+            {sectionLabel("Info")}
+            {menuRow("ℹ️", "About", null, () => { setShowAbout(true); setOpen(false); })}
+            <div style={{ height: "8px" }} />
+          </div>
+        )}
+      </div>
+
+      {/* About modal */}
+      {showAbout && <AboutModal dark={dark} onClose={() => setShowAbout(false)} theme={theme} />}
+    </>
   );
 }
 
@@ -254,7 +339,7 @@ function mkBtn(active, theme) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function HomeScreen({ onStart, dark, onToggleDark }) {
+function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics }) {
   const [mode, setMode] = useState(null);
   const [difficulty, setDifficulty] = useState("medium");
   const theme = getTheme(dark);
@@ -275,7 +360,7 @@ function HomeScreen({ onStart, dark, onToggleDark }) {
     }}>
       {/* Menu */}
       <div style={{ position: "absolute", top: "16px", right: "16px", zIndex: 10 }}>
-        <Menu dark={dark} onToggleDark={onToggleDark} theme={theme} />
+        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} theme={theme} />
       </div>
 
       {/* Hero */}
@@ -432,7 +517,7 @@ function HomeScreen({ onStart, dark, onToggleDark }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GAME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function GameScreen({ config, onHome, dark, onToggleDark }) {
+function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHaptics }) {
   const { mode, difficulty } = config;
   const isBot = mode === "bot";
   const BOT = "O", HUMAN = "X";
@@ -453,9 +538,13 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
 
   function doMove(currentBoard, idx, player, mc) {
     const [newBoard, removed] = applyMove(currentBoard, idx, player, mc + 1);
+    if (haptics) haptic(removed !== null ? "medium" : "light");
     if (removed !== null) { setVanishIdx(removed); setTimeout(() => setVanishIdx(null), 450); }
     const result = checkWinner(newBoard);
-    if (result) { setWinner(result.player); setWinLine(result.line); setScores(s => ({ ...s, [result.player]: s[result.player] + 1 })); }
+    if (result) {
+      if (haptics) haptic("win");
+      setWinner(result.player); setWinLine(result.line); setScores(s => ({ ...s, [result.player]: s[result.player] + 1 }));
+    }
     setBoard(newBoard); setMoveCount(mc + 1); setTurn(player === "X" ? "O" : "X");
     return result;
   }
@@ -573,10 +662,12 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
       display: "flex", flexDirection: "column",
       overflow: "hidden",
     }}>
+      {/* Safe area top spacer — for status bar (shows for O who is rotated) */}
+      <div style={{ height: "env(safe-area-inset-top)", background: theme.bg, flexShrink: 0 }} />
+
       {/* O — top, rotated 180° */}
       <div style={{
-        width: "100%", padding: "20px 20px 16px", boxSizing: "border-box",
-        paddingTop: "calc(20px + env(safe-area-inset-top))",
+        width: "100%", padding: "16px 20px", boxSizing: "border-box",
         borderBottom: `1px solid ${theme.border}`,
         background: !winner && turn === "O" ? "rgba(116,185,255,0.05)" : "transparent",
         transition: "background 0.4s",
@@ -600,8 +691,7 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
 
       {/* X — bottom, normal */}
       <div style={{
-        width: "100%", padding: "16px 20px 20px", boxSizing: "border-box",
-        paddingBottom: "calc(20px + env(safe-area-inset-bottom))",
+        width: "100%", padding: "16px 20px", boxSizing: "border-box",
         borderTop: `1px solid ${theme.border}`,
         background: !winner && turn === "X" ? "rgba(255,107,107,0.05)" : "transparent",
         transition: "background 0.4s",
@@ -610,6 +700,9 @@ function GameScreen({ config, onHome, dark, onToggleDark }) {
       }}>
         {versusPanel("X")}
       </div>
+
+      {/* Safe area bottom spacer — for home indicator */}
+      <div style={{ height: "env(safe-area-inset-bottom)", background: theme.bg, flexShrink: 0 }} />
     </div>
   );
 
@@ -788,7 +881,9 @@ export default function App() {
   const [screen, setScreen] = useState("splash"); // splash | home | pregame | game
   const [config, setConfig] = useState(null);
   const [dark, setDark]     = useState(true);
+  const [haptics, setHaptics] = useState(true);
   const toggleDark = () => setDark(d => !d);
+  const toggleHaptics = () => setHaptics(h => !h);
 
   // Splash → home
   useEffect(() => {
@@ -820,7 +915,7 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.4s ease both" }}>
-        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} />
+        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} />
       </div>
     </>
   );
@@ -829,7 +924,7 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.45s ease both" }}>
-        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} />
+        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} />
       </div>
     </>
   );
