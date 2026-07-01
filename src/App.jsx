@@ -144,6 +144,39 @@ function getTheme(dark) {
 const CLR = { X: "#ff6b6b", O: "#74b9ff" };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// USERNAME MODERATION (client-side quick check — the DB trigger is the real gate)
+// This just gives instant feedback before hitting the server.
+// ─────────────────────────────────────────────────────────────────────────────
+const BANNED_USERNAME_WORDS = [
+  "fuck","shit","bitch","cunt","nigger","nigga","faggot","fag","retard","rape",
+  "slut","whore","dick","cock","pussy","asshole","bastard","nazi","hitler",
+  "kike","spic","chink","coon","tranny","molest","pedo",
+];
+// Returns a reason code if the username is invalid, or null if it's fine.
+function usernameIssue(name) {
+  if (name.length < 3)  return "short";
+  if (name.length > 16) return "long";
+  if (!/^[A-Za-z0-9_]+$/.test(name)) return "chars";
+  if (/[0-9]{7,}/.test(name)) return "personal"; // long digit run → phone-like
+  const u = name.toLowerCase();
+  // normalize common leetspeak so "sh1t" / "f4g" are still caught
+  const leet = u.replace(/0/g,"o").replace(/1/g,"i").replace(/3/g,"e")
+                .replace(/4/g,"a").replace(/5/g,"s").replace(/7/g,"t").replace(/8/g,"b");
+  if (BANNED_USERNAME_WORDS.some(w => u.includes(w) || leet.includes(w))) return "vulgar";
+  return null;
+}
+// Human-readable reasons shown under the input.
+const USERNAME_REASONS = {
+  short:    "Reason: too short (3–16 characters)",
+  long:     "Reason: too long (3–16 characters)",
+  chars:    "Reason: letters, numbers & underscores only",
+  personal: "Reason: looks like personal info",
+  vulgar:   "Reason: vulgar or offensive username",
+  taken:    "Reason: username already taken",
+  generic:  "Reason: username not allowed",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HAPTIC FEEDBACK
 // ─────────────────────────────────────────────────────────────────────────────
 function haptic(type = "light") {
@@ -518,14 +551,8 @@ function AuthModal({ dark, theme, onClose }) {
 
         <button
           type="button" onClick={onClose}
-          style={{
-            width: "100%", marginTop: "12px", padding: "10px",
-            background: "transparent",
-            border: "none",
-            color: theme.textFaint, fontSize: "11px",
-            letterSpacing: "0.1em", textTransform: "uppercase",
-            cursor: "pointer", fontFamily: "'Courier New', monospace",
-          }}
+          {...linkBtnProps(theme)}
+          style={{ ...linkBtnProps(theme).style, width: "100%", marginTop: "12px", padding: "10px" }}
         >
           Cancel
         </button>
@@ -537,9 +564,10 @@ function AuthModal({ dark, theme, onClose }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MENU COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, theme, user, onOpenAuth, onLogout }) {
+function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, theme, user, onOpenAuth, onLogout, onOpenStats, onOpenLeaderboard, username }) {
   const [open, setOpen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [stats, setStats] = useState(null); // { wins, losses } for the logged-in user
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -550,6 +578,26 @@ function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVo
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+
+  // Load the player's total wins/losses whenever the menu opens (keeps numbers
+  // fresh after a game). Reads the per-difficulty view and sums it. RLS ensures
+  // only the logged-in user's own rows are ever returned.
+  useEffect(() => {
+    if (!open || !user || !supabase) { return; }
+    let active = true;
+    supabase
+      .from("stats_by_difficulty")
+      .select("wins, losses")
+      .then(({ data }) => {
+        if (!active) return;
+        const rows = data ?? [];
+        setStats({
+          wins:   rows.reduce((s, r) => s + Number(r.wins), 0),
+          losses: rows.reduce((s, r) => s + Number(r.losses), 0),
+        });
+      });
+    return () => { active = false; };
+  }, [open, user]);
 
   const menuRow = (emoji, label, right, onClick) => (
     <div
@@ -641,15 +689,33 @@ function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVo
                   <div style={{ fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, textTransform: "uppercase", marginBottom: "2px" }}>
                     Signed in as
                   </div>
-                  <div style={{ fontSize: "12px", color: theme.text, wordBreak: "break-all", lineHeight: 1.4 }}>
+                  {username && (
+                    <div style={{ fontSize: "13px", fontWeight: "700", color: CLR.O, lineHeight: 1.4 }}>{username}</div>
+                  )}
+                  <div style={{ fontSize: "11px", color: theme.textDim, wordBreak: "break-all", lineHeight: 1.4 }}>
                     {user.email}
                   </div>
                 </div>
-                {menuRow("🚪", "Log out", null, () => { setOpen(false); onLogout(); })}
+                {/* Win / loss record (vs Bot) */}
+                <div style={{ display: "flex", gap: "18px", padding: "2px 16px 10px", fontFamily: "'Courier New', monospace" }}>
+                  <div>
+                    <div style={{ fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, textTransform: "uppercase" }}>Wins</div>
+                    <div style={{ fontSize: "18px", fontWeight: "900", color: CLR.O }}>{stats ? stats.wins : "·"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, textTransform: "uppercase" }}>Losses</div>
+                    <div style={{ fontSize: "18px", fontWeight: "900", color: CLR.X }}>{stats ? stats.losses : "·"}</div>
+                  </div>
+                </div>
               </>
             ) : (
               menuRow("👤", "Sign up / Log in", null, () => { setOpen(false); onOpenAuth(); })
             )}
+            {/* Stats & Leaderboard are visible to everyone — guests see a
+                sign-up prompt inside those pages instead of being locked out. */}
+            {menuRow("📊", "Stats", null, () => { setOpen(false); onOpenStats(); })}
+            {menuRow("🏆", "Leaderboard", null, () => { setOpen(false); onOpenLeaderboard(); })}
+            {user && menuRow("🚪", "Log out", null, () => { setOpen(false); onLogout(); })}
 
             {divider()}
             {sectionLabel("Settings")}
@@ -714,13 +780,32 @@ function mkBtn(active, theme) {
   };
 }
 
+// Style + hover handlers for text-only "link" buttons (Cancel, Log out, etc.)
+// so they read as clickable via an underline, even with no border/background.
+function linkBtnProps(theme) {
+  return {
+    style: {
+      background: "transparent", border: "none",
+      color: theme.textFaint, fontSize: "11px",
+      letterSpacing: "0.1em", textTransform: "uppercase",
+      textDecoration: "underline", textUnderlineOffset: "3px",
+      cursor: "pointer", fontFamily: "'Courier New', monospace",
+      transition: "color 0.15s",
+    },
+    onMouseEnter: e => { e.currentTarget.style.color = theme.textDim; },
+    onMouseLeave: e => { e.currentTarget.style.color = theme.textFaint; },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, user, onLogout }) {
+function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, user, onLogout, username, onUsernameSaved }) {
   const [mode, setMode] = useState(null);
   const [difficulty, setDifficulty] = useState("medium");
   const [authOpen, setAuthOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const theme = getTheme(dark);
 
   const difficultyInfo = {
@@ -732,7 +817,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 
   return (
     <div style={{
-      height: "100%", background: theme.bg, color: theme.text,
+      height: "100dvh", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
       overflow: "hidden",
@@ -740,7 +825,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
     }}>
       {/* Menu */}
       <div style={{ position: "absolute", top: "16px", right: "16px", zIndex: 10 }}>
-        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} sfxVolume={sfxVolume} onSfxVolume={onSfxVolume} theme={theme} user={user} onOpenAuth={() => setAuthOpen(true)} onLogout={onLogout} />
+        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} sfxVolume={sfxVolume} onSfxVolume={onSfxVolume} theme={theme} user={user} onOpenAuth={() => setAuthOpen(true)} onLogout={onLogout} onOpenStats={() => setStatsOpen(true)} onOpenLeaderboard={() => setLeaderboardOpen(true)} username={username} />
       </div>
 
       {/* Hero */}
@@ -843,9 +928,15 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
           })}
         </div>
 
-        {/* Difficulty — expands when bot selected */}
+        {/* Difficulty — expands when bot selected.
+            flexShrink: 0 keeps this at its natural height instead of being
+            squeezed by the parent flex column — without it, `overflow: hidden`
+            (needed for the collapse animation) removes the item's normal
+            "don't shrink below content" floor, silently clipping rows on
+            shorter screens instead of letting the outer area scroll. */}
         <div style={{
           width: "100%",
+          flexShrink: 0,
           maxHeight: mode === "bot" ? "400px" : "0px",
           overflow: "hidden",
           transition: "max-height 0.35s ease",
@@ -903,6 +994,12 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 
       {/* Login / sign up modal */}
       {authOpen && <AuthModal dark={dark} theme={theme} onClose={() => setAuthOpen(false)} />}
+
+      {/* Full-page stats — guests see a sign-up prompt instead of being locked out */}
+      {statsOpen && <StatsScreen user={user} theme={theme} dark={dark} onClose={() => setStatsOpen(false)} onSignUp={() => { setStatsOpen(false); setAuthOpen(true); }} />}
+
+      {/* Full-page leaderboard — guests can browse the top 10, but need an account to be ranked */}
+      {leaderboardOpen && <LeaderboardScreen user={user} theme={theme} dark={dark} onClose={() => setLeaderboardOpen(false)} username={username} onUsernameSaved={onUsernameSaved} onSignUp={() => { setLeaderboardOpen(false); setAuthOpen(true); }} />}
     </div>
   );
 }
@@ -910,7 +1007,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 // ─────────────────────────────────────────────────────────────────────────────
 // GAME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume }) {
+function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, user }) {
   const { mode, difficulty } = config;
   const isBot = mode === "bot";
   const BOT = "O", HUMAN = "X";
@@ -939,6 +1036,14 @@ function GameScreen({ config, onHome, dark, onToggleDark, haptics, onToggleHapti
       if (haptics) haptic("win");
       if (sfxVolume > 0) setTimeout(() => playSfx("win", sfxVolume), 120);
       setWinner(result.player); setWinLine(result.line); setScores(s => ({ ...s, [result.player]: s[result.player] + 1 }));
+      // Save the result — only for logged-in players in vs-Bot games.
+      // Logs one row per game (with its difficulty). Fire-and-forget: a save
+      // error must never interrupt play. user_id is filled by the DB default.
+      if (isBot && user && supabase) {
+        supabase.from("games")
+          .insert({ difficulty, result: result.player === HUMAN ? "win" : "loss" })
+          .then(({ error }) => { if (error) console.error("Failed to save game:", error.message); });
+      }
     }
     setBoard(newBoard); setMoveCount(mc + 1); setTurn(player === "X" ? "O" : "X");
     return result;
@@ -1270,6 +1375,453 @@ function PreGameScreen({ config, dark }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// STATS SCREEN (full page — wins/losses/win rate per difficulty)
+// ─────────────────────────────────────────────────────────────────────────────
+const DIFFICULTIES = [
+  { id: "easy",       label: "Easy",       emoji: "😌" },
+  { id: "medium",     label: "Medium",     emoji: "🤔" },
+  { id: "hard",       label: "Hard",       emoji: "😈" },
+  { id: "impossible", label: "Impossible", emoji: "💀" },
+];
+
+function StatsScreen({ user, theme, dark, onClose, onSignUp }) {
+  const [loading, setLoading] = useState(!!user);
+  const [error, setError]     = useState("");
+  // Map of difficulty -> { wins, losses, games }
+  const [byDiff, setByDiff]   = useState({});
+
+  useEffect(() => {
+    if (!user) return; // guests have nothing to fetch — CTA renders instead
+    if (!supabase) { setError("Stats are unavailable."); setLoading(false); return; }
+    let active = true;
+    supabase
+      .from("stats_by_difficulty")
+      .select("difficulty, wins, losses, games")
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) { setError(error.message); setLoading(false); return; }
+        const map = {};
+        (data ?? []).forEach(r => {
+          map[r.difficulty] = { wins: Number(r.wins), losses: Number(r.losses), games: Number(r.games) };
+        });
+        setByDiff(map);
+        setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  // Totals across all difficulties
+  const totals = DIFFICULTIES.reduce((acc, d) => {
+    const s = byDiff[d.id];
+    if (s) { acc.wins += s.wins; acc.losses += s.losses; acc.games += s.games; }
+    return acc;
+  }, { wins: 0, losses: 0, games: 0 });
+
+  const rate = (wins, games) => (games > 0 ? Math.round((wins / games) * 100) : null);
+
+  const backBtn = (
+    <button
+      onClick={onClose}
+      style={{
+        ...mkBtn(false, theme), padding: "8px 18px", fontSize: "11px",
+      }}
+    >
+      ← Back
+    </button>
+  );
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 210,
+      background: theme.bg, color: theme.text,
+      fontFamily: "'Courier New', monospace",
+      display: "flex", flexDirection: "column",
+      paddingTop: "env(safe-area-inset-top)",
+      paddingBottom: "env(safe-area-inset-bottom)",
+      animation: "screenIn 0.25s ease both",
+    }}>
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, flexShrink: 0,
+      }}>
+        <div>
+          <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint }}>YOUR</div>
+          <div style={{ fontSize: "22px", fontWeight: "900", letterSpacing: "-0.02em", color: theme.text }}>Stats</div>
+        </div>
+        {backBtn}
+      </div>
+
+      {/* Body — scrollable */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "20px", maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+        {!user ? (
+          <div style={{ textAlign: "center", marginTop: "40px" }}>
+            <div style={{ fontSize: "34px", marginBottom: "12px" }}>📊</div>
+            <div style={{ fontSize: "15px", fontWeight: "800", color: theme.text, marginBottom: "8px" }}>Track your stats</div>
+            <div style={{ fontSize: "12px", color: theme.textFaint, lineHeight: 1.6, marginBottom: "20px" }}>
+              Create a free account to record your wins and losses per difficulty and see your win rate here.
+            </div>
+            <button onClick={onSignUp} style={{ ...mkBtn(true, theme), padding: "12px 28px" }}>Sign up / Log in</button>
+          </div>
+        ) : loading ? (
+          <div style={{ textAlign: "center", color: theme.textDim, fontSize: "13px", marginTop: "40px" }}>Loading…</div>
+        ) : error ? (
+          <div style={{ textAlign: "center", color: CLR.X, fontSize: "12px", marginTop: "40px" }}>{error}</div>
+        ) : (
+          <>
+            {/* Overall summary */}
+            <div style={{
+              border: `1px solid ${theme.border}`, borderRadius: "14px",
+              padding: "16px", marginBottom: "20px",
+              background: theme.surface,
+              display: "flex", justifyContent: "space-around", textAlign: "center",
+            }}>
+              {[
+                { label: "Wins",     value: totals.wins,   color: CLR.O },
+                { label: "Losses",   value: totals.losses, color: CLR.X },
+                { label: "Win rate", value: rate(totals.wins, totals.games) == null ? "—" : `${rate(totals.wins, totals.games)}%`, color: theme.text },
+              ].map(s => (
+                <div key={s.label}>
+                  <div style={{ fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, textTransform: "uppercase", marginBottom: "4px" }}>{s.label}</div>
+                  <div style={{ fontSize: "26px", fontWeight: "900", color: s.color, lineHeight: 1 }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ fontSize: "10px", letterSpacing: "0.2em", color: theme.textFaint, textTransform: "uppercase", marginBottom: "10px" }}>
+              By difficulty
+            </div>
+
+            {/* Per-difficulty cards */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {DIFFICULTIES.map(d => {
+                const s = byDiff[d.id] ?? { wins: 0, losses: 0, games: 0 };
+                const wr = rate(s.wins, s.games);
+                return (
+                  <div key={d.id} style={{
+                    border: `1px solid ${theme.border}`, borderRadius: "12px",
+                    padding: "12px 14px", background: theme.surface,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: s.games > 0 ? "10px" : 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span style={{ fontSize: "18px" }}>{d.emoji}</span>
+                        <span style={{ fontSize: "14px", fontWeight: "700", color: theme.text }}>{d.label}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                        <span style={{ fontSize: "13px", color: CLR.O, fontWeight: "700" }}>{s.wins}W</span>
+                        <span style={{ fontSize: "13px", color: CLR.X, fontWeight: "700" }}>{s.losses}L</span>
+                        <span style={{ fontSize: "13px", color: theme.textDim, minWidth: "38px", textAlign: "right" }}>
+                          {wr == null ? "—" : `${wr}%`}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Win-rate bar (only if they've played this difficulty) */}
+                    {s.games > 0 && (
+                      <div style={{ height: "5px", borderRadius: "3px", background: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${wr}%`, background: CLR.O, transition: "width 0.4s" }} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {totals.games === 0 && (
+              <div style={{ textAlign: "center", color: theme.textFaint, fontSize: "12px", marginTop: "24px", lineHeight: 1.6 }}>
+                No games yet. Beat the bot to start building your record!
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERNAME PICKER (shared form — used by the required setup modal AND leaderboard)
+// ─────────────────────────────────────────────────────────────────────────────
+function UsernamePicker({ user, theme, dark, initial = "", submitLabel = "Save", onSaved, onCancel }) {
+  const [nameInput, setNameInput] = useState(initial);
+  const [error, setError]         = useState("");
+  const [saving, setSaving]       = useState(false);
+
+  async function save() {
+    if (saving) return;
+    const name = nameInput.trim();
+    setError("");     // old message disappears immediately…
+    setSaving(true);  // …and a brief loading state shows in its place
+    const started = Date.now();
+    // Keep the spinner up ~250ms so a repeated error visibly "moves" instead of
+    // looking frozen. On success, onSaved fires after the same short beat.
+    const finish = (msg) => {
+      const wait = Math.max(0, 250 - (Date.now() - started));
+      setTimeout(() => { setSaving(false); if (msg) setError(msg); else onSaved(name); }, wait);
+    };
+
+    const issue = usernameIssue(name);
+    if (issue) { finish(USERNAME_REASONS[issue]); return; }
+    if (!supabase) { finish("Reason: sign-in unavailable"); return; }
+
+    const { error } = await supabase.from("profiles").upsert({ user_id: user.id, username: name });
+    if (error) {
+      if (error.code === "23505") return finish(USERNAME_REASONS.taken);
+      if (/not allowed|check/i.test(error.message)) return finish(USERNAME_REASONS.generic);
+      return finish(error.message);
+    }
+    finish(null); // success
+  }
+
+  return (
+    <>
+      <input
+        value={nameInput} onChange={e => { setNameInput(e.target.value); if (error) setError(""); }}
+        placeholder="username" maxLength={16} autoFocus
+        style={{
+          width: "100%", boxSizing: "border-box", textAlign: "center",
+          background: theme.surface, border: `1px solid ${theme.border}`,
+          borderRadius: "10px", padding: "12px 14px", fontSize: "14px",
+          color: theme.text, fontFamily: "'Courier New', monospace", outline: "none",
+          marginBottom: "10px",
+        }}
+        onFocus={e => e.currentTarget.style.borderColor = CLR.O}
+        onBlur={e => e.currentTarget.style.borderColor = theme.border}
+        onKeyDown={e => { if (e.key === "Enter") save(); }}
+      />
+      {error && (
+        <div style={{ marginBottom: "10px", lineHeight: 1.5 }}>
+          <div style={{ fontSize: "12px", color: CLR.X, fontWeight: "700" }}>Username isn't accepted</div>
+          <div style={{ fontSize: "11px", color: CLR.X, opacity: 0.85 }}>{error}</div>
+        </div>
+      )}
+      <button
+        onClick={save} disabled={saving}
+        style={{
+          width: "100%", padding: "13px",
+          background: dark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)",
+          border: `2px solid ${dark ? "#666" : "#888"}`, borderRadius: "12px",
+          color: theme.text, fontSize: "13px", fontWeight: "700",
+          letterSpacing: "0.15em", textTransform: "uppercase",
+          cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1,
+          fontFamily: "'Courier New', monospace",
+        }}
+      >
+        {saving ? "…" : submitLabel}
+      </button>
+      {onCancel && (
+        <button onClick={onCancel}
+          {...linkBtnProps(theme)}
+          style={{ ...linkBtnProps(theme).style, marginTop: "10px", width: "100%" }}>
+          Cancel
+        </button>
+      )}
+    </>
+  );
+}
+
+// Required, non-dismissable username setup — shown right after login/signup when
+// the account has no username yet. The only escape is to log back out.
+function RequireUsernameModal({ user, theme, dark, onSaved, onLogout }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 300,
+      background: "rgba(0,0,0,0.7)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "24px", animation: "fadeIn 0.2s ease both",
+    }}>
+      <div style={{
+        background: theme.menuBg, border: `1px solid ${theme.border}`,
+        borderRadius: "20px", padding: "28px 24px", maxWidth: "340px", width: "100%",
+        fontFamily: "'Courier New', monospace", animation: "screenIn 0.25s ease both",
+        textAlign: "center",
+      }}>
+        <div style={{ fontSize: "34px", marginBottom: "10px" }}>👋</div>
+        <div style={{ fontSize: "18px", fontWeight: "800", color: theme.text, marginBottom: "6px" }}>Choose a username</div>
+        <div style={{ fontSize: "11px", color: theme.textFaint, marginBottom: "18px", lineHeight: 1.6 }}>
+          Pick a public username to finish setting up. It's the only name other players see — never your email. Keep it clean and don't include personal info.
+        </div>
+        <UsernamePicker user={user} theme={theme} dark={dark} submitLabel="Continue" onSaved={onSaved} />
+        <button onClick={onLogout}
+          {...linkBtnProps(theme)}
+          style={{ ...linkBtnProps(theme).style, marginTop: "14px", fontSize: "10px" }}>
+          Not now — log out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEADERBOARD SCREEN (full page — global top players per difficulty)
+// ─────────────────────────────────────────────────────────────────────────────
+function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSaved, onSignUp }) {
+  const [editing, setEditing]       = useState(false);
+  const isMember = !!(user && username); // logged in AND has picked a public name
+
+  // Board
+  const [activeDiff, setActiveDiff] = useState("easy");
+  const [board, setBoard]           = useState([]);
+  const [myRank, setMyRank]         = useState(null);   // { rank, wins } | null
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [boardError, setBoardError] = useState("");
+
+  // The top-10 board is public — everyone can see it, including guests.
+  // "My rank" is only fetched for members (it's meaningless without an account).
+  useEffect(() => {
+    if (!supabase) return;
+    let active = true;
+    setBoardLoading(true); setBoardError("");
+    Promise.all([
+      supabase.rpc("get_leaderboard", { diff: activeDiff }),
+      isMember ? supabase.rpc("get_my_rank", { diff: activeDiff }) : Promise.resolve({ data: null }),
+    ]).then(([lb, mine]) => {
+      if (!active) return;
+      if (lb.error) { setBoardError(lb.error.message); setBoardLoading(false); return; }
+      setBoard(lb.data ?? []);
+      setMyRank((mine.data && mine.data[0]) ? mine.data[0] : null);
+      setBoardLoading(false);
+    });
+    return () => { active = false; };
+  }, [activeDiff, isMember]);
+
+  // ── Change-username form (shown when editing) ──
+  const usernameForm = (
+    <div style={{ maxWidth: "320px", margin: "40px auto 0", textAlign: "center", padding: "0 20px", width: "100%", boxSizing: "border-box" }}>
+      <div style={{ fontSize: "34px", marginBottom: "10px" }}>🏆</div>
+      <div style={{ fontSize: "16px", fontWeight: "800", color: theme.text, marginBottom: "6px" }}>
+        Change username
+      </div>
+      <div style={{ fontSize: "11px", color: theme.textFaint, marginBottom: "18px", lineHeight: 1.6 }}>
+        Pick a public username. This is the only thing other players see — never your email. Keep it clean and don't include personal info.
+      </div>
+      <UsernamePicker
+        user={user} theme={theme} dark={dark} initial={username} submitLabel="Save"
+        onSaved={(n) => { onUsernameSaved(n); setEditing(false); }}
+        onCancel={() => setEditing(false)}
+      />
+    </div>
+  );
+
+  const medal = (rank) => rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : null;
+
+  // ── One leaderboard row ──
+  const boardRow = (r, key) => (
+    <div key={key} style={{
+      display: "flex", alignItems: "center", gap: "12px",
+      padding: "11px 14px", borderRadius: "10px",
+      background: r.is_you ? (dark ? "rgba(116,185,255,0.12)" : "rgba(116,185,255,0.16)") : theme.surface,
+      border: `1px solid ${r.is_you ? CLR.O : theme.border}`,
+    }}>
+      <div style={{ width: "30px", textAlign: "center", fontSize: medal(Number(r.rank)) ? "16px" : "13px", fontWeight: "900", color: theme.textDim, flexShrink: 0 }}>
+        {medal(Number(r.rank)) ?? `#${r.rank}`}
+      </div>
+      <div style={{ flex: 1, fontSize: "14px", fontWeight: "700", color: r.is_you ? CLR.O : theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {r.username}{r.is_you ? " (you)" : ""}
+      </div>
+      <div style={{ fontSize: "14px", fontWeight: "900", color: theme.text, flexShrink: 0 }}>
+        {r.wins}<span style={{ fontSize: "10px", color: theme.textFaint, marginLeft: "3px" }}>W</span>
+      </div>
+    </div>
+  );
+
+  const youAreListed = board.some(r => r.is_you);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 210,
+      background: theme.bg, color: theme.text,
+      fontFamily: "'Courier New', monospace",
+      display: "flex", flexDirection: "column",
+      paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)",
+      animation: "screenIn 0.25s ease both",
+    }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, flexShrink: 0 }}>
+        <div>
+          <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint }}>GLOBAL</div>
+          <div style={{ fontSize: "22px", fontWeight: "900", letterSpacing: "-0.02em", color: theme.text }}>Leaderboard</div>
+        </div>
+        <button onClick={onClose} style={{ ...mkBtn(false, theme), padding: "8px 18px", fontSize: "11px" }}>← Back</button>
+      </div>
+
+      {editing ? (
+        usernameForm
+      ) : (
+        <>
+          {/* Difficulty tabs */}
+          <div style={{ display: "flex", gap: "6px", padding: "14px 16px 6px", overflowX: "auto", flexShrink: 0 }}>
+            {DIFFICULTIES.map(d => {
+              const on = activeDiff === d.id;
+              return (
+                <button key={d.id} onClick={() => setActiveDiff(d.id)} style={{
+                  flex: 1, minWidth: "72px", padding: "8px 6px",
+                  background: on ? (dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)") : "transparent",
+                  border: `2px solid ${on ? (dark ? "#666" : "#888") : theme.border}`,
+                  borderRadius: "10px", cursor: "pointer",
+                  color: on ? theme.text : theme.textDim,
+                  fontFamily: "'Courier New', monospace", fontSize: "11px", fontWeight: "700",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+                  transition: "all 0.15s",
+                }}>
+                  <span style={{ fontSize: "15px" }}>{d.emoji}</span>
+                  {d.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Board list — scrollable */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 16px", maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+            {boardLoading ? (
+              <div style={{ textAlign: "center", color: theme.textDim, fontSize: "13px", marginTop: "30px" }}>Loading…</div>
+            ) : boardError ? (
+              <div style={{ textAlign: "center", color: CLR.X, fontSize: "12px", marginTop: "30px" }}>{boardError}</div>
+            ) : board.length === 0 ? (
+              <div style={{ textAlign: "center", color: theme.textFaint, fontSize: "12px", marginTop: "36px", lineHeight: 1.7 }}>
+                No wins recorded at this difficulty yet.<br/>Be the first to make the board!
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {board.map((r, i) => boardRow(r, i))}
+              </div>
+            )}
+          </div>
+
+          {/* Your placement (only if you're not already visible in the top list) */}
+          {!boardLoading && !boardError && (
+            <div style={{ flexShrink: 0, padding: "12px 16px 16px", borderTop: `1px solid ${theme.border}`, maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+              <div style={{ fontSize: "9px", letterSpacing: "0.2em", color: theme.textFaint, textTransform: "uppercase", marginBottom: "8px" }}>Your placement</div>
+              {!isMember ? (
+                <>
+                  <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.6, marginBottom: "10px" }}>
+                    Sign up to claim a username and get ranked on this board!
+                  </div>
+                  <button onClick={onSignUp} style={{ ...mkBtn(true, theme), padding: "9px 20px", fontSize: "11px" }}>Sign up / Log in</button>
+                </>
+              ) : myRank ? (
+                !youAreListed ? boardRow({ rank: myRank.rank, username, wins: myRank.wins, is_you: true }, "me")
+                             : <div style={{ fontSize: "12px", color: theme.textDim }}>You're #{myRank.rank} — shown above ↑</div>
+              ) : (
+                <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.6 }}>
+                  No wins here yet. Win a <b>{activeDiff}</b> game to get ranked!
+                </div>
+              )}
+              {isMember && (
+                <button onClick={() => setEditing(true)}
+                  {...linkBtnProps(theme)}
+                  style={{ ...linkBtnProps(theme).style, marginTop: "10px", padding: 0, fontSize: "10px" }}>
+                  Playing as {username} · change
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ROOT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
@@ -1279,6 +1831,8 @@ export default function App() {
   const [haptics, setHaptics] = useState(true);
   const [sfxVolume, setSfxVolume] = useState(0.5);
   const [user, setUser] = useState(null); // logged-in Supabase user, or null for guests
+  const [username, setUsername] = useState(null);       // player's chosen public name
+  const [usernameLoaded, setUsernameLoaded] = useState(true); // has the profile been checked?
   const toggleDark = () => setDark(d => !d);
   const toggleHaptics = () => setHaptics(h => !h);
 
@@ -1293,7 +1847,21 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Whenever the logged-in user changes, load their username (if any). This
+  // drives the "you must pick a username" gate below. Guests skip it entirely.
+  useEffect(() => {
+    if (!user || !supabase) { setUsername(null); setUsernameLoaded(true); return; }
+    setUsernameLoaded(false);
+    let active = true;
+    supabase.from("profiles").select("username").eq("user_id", user.id).maybeSingle()
+      .then(({ data }) => { if (active) { setUsername(data?.username ?? null); setUsernameLoaded(true); } });
+    return () => { active = false; };
+  }, [user]);
+
   const handleLogout = async () => { if (supabase) await supabase.auth.signOut(); };
+
+  // A logged-in account with no username yet must choose one before continuing.
+  const needsUsername = !!user && usernameLoaded && !username;
 
   // Splash → home
   useEffect(() => {
@@ -1325,7 +1893,7 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.4s ease both" }}>
-        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} />
+        <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} user={user} />
       </div>
     </>
   );
@@ -1334,8 +1902,12 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.45s ease both" }}>
-        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} user={user} onLogout={handleLogout} />
+        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} user={user} onLogout={handleLogout} username={username} onUsernameSaved={setUsername} />
       </div>
+      {/* Required username setup — blocks play until a name is chosen (or logout) */}
+      {needsUsername && (
+        <RequireUsernameModal user={user} theme={getTheme(dark)} dark={dark} onSaved={setUsername} onLogout={handleLogout} />
+      )}
     </>
   );
 }
