@@ -893,6 +893,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
           {[
             { id: "versus", emoji: "👥", title: "Versus", sub: "Pass & play with a friend", accent: "#a78bfa" },
             { id: "bot",    emoji: "🤖", title: "vs Bot", sub: "Challenge the AI",  accent: "#34d399" },
+            { id: "online", emoji: "🌐", title: "Online", sub: "Play a friend with a code", accent: "#38bdf8" },
           ].map(({ id, emoji, title, sub, accent }) => {
             const selected = mode === id;
             return (
@@ -977,7 +978,9 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
           style={{
             width: "100%",
             background: mode
-              ? (mode === "versus" ? "linear-gradient(135deg, #a78bfa, #818cf8)" : "linear-gradient(135deg, #34d399, #059669)")
+              ? (mode === "versus" ? "linear-gradient(135deg, #a78bfa, #818cf8)"
+                 : mode === "online" ? "linear-gradient(135deg, #38bdf8, #0284c7)"
+                 : "linear-gradient(135deg, #34d399, #059669)")
               : (dark ? "#1f1f28" : "#ddd"),
             border: "none", borderRadius: "14px",
             color: mode ? "#fff" : theme.textFaint,
@@ -988,7 +991,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
             boxShadow: mode ? (dark ? "0 8px 24px rgba(0,0,0,0.4)" : "0 8px 24px rgba(0,0,0,0.15)") : "none",
           }}
         >
-          {mode ? `Play ${mode === "versus" ? "Versus" : "vs Bot"} →` : "Select a mode"}
+          {mode ? `Play ${mode === "versus" ? "Versus" : mode === "online" ? "Online" : "vs Bot"} →` : "Select a mode"}
         </button>
       </div>
 
@@ -1822,6 +1825,266 @@ function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSav
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ONLINE PLAY (full screen — hub, create/waiting, join, live game)
+// Identity uses a random per-tab "seat token" (works for guests too). All game
+// actions go through the sealed Supabase functions; the DB is the referee.
+// Live sync = a lightweight broadcast "poke" on channel match:<code>, on which
+// each client refetches authoritative state via get_match.
+// ─────────────────────────────────────────────────────────────────────────────
+const ONLINE_ACCENT = "#38bdf8";
+
+function newSeat() {
+  const rnd = () => Math.random().toString(36).slice(2);
+  return (globalThis.crypto?.randomUUID?.() || (rnd() + rnd())) + "-" + rnd();
+}
+
+function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
+  const theme = getTheme(dark);
+  const [view, setView]   = useState("hub");   // hub | waiting | join | connected
+  const [code, setCode]   = useState("");
+  const [state, setState] = useState(null);    // latest get_match snapshot
+  const [joinInput, setJoinInput] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy]   = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [dots, setDots]   = useState(1);
+
+  const seatRef    = useRef(null);
+  const channelRef = useRef(null);
+  const codeRef    = useRef("");   // always-current code for callbacks
+
+  // Animated "…" for the waiting screen.
+  useEffect(() => {
+    if (view !== "waiting") return;
+    const t = setInterval(() => setDots(d => (d % 3) + 1), 450);
+    return () => clearInterval(t);
+  }, [view]);
+
+  // Tear down the realtime channel if the component unmounts.
+  useEffect(() => () => { if (channelRef.current) supabase.removeChannel(channelRef.current); }, []);
+
+  async function refresh(c = codeRef.current, seat = seatRef.current) {
+    if (!c || !seat) return null;
+    const { data, error } = await supabase.rpc("get_match", { p_code: c, p_seat: seat });
+    if (!error && data) setState(data);
+    return data;
+  }
+
+  // Subscribe to this match's channel. onReady fires once we're actually live.
+  function subscribe(c, onReady) {
+    if (channelRef.current) supabase.removeChannel(channelRef.current);
+    const ch = supabase.channel(`match:${c}`, { config: { broadcast: { self: false } } });
+    ch.on("broadcast", { event: "sync" }, () => refresh())
+      .subscribe((status) => { if (status === "SUBSCRIBED" && onReady) onReady(); });
+    channelRef.current = ch;
+  }
+  function poke() {
+    channelRef.current?.send({ type: "broadcast", event: "sync", payload: {} });
+  }
+
+  async function handleCreate() {
+    if (!supabase) { setError("Online play is unavailable right now."); return; }
+    setBusy(true); setError("");
+    seatRef.current = newSeat();
+    const { data, error } = await supabase.rpc("create_match", { p_seat: seatRef.current });
+    setBusy(false);
+    if (error) { setError(error.message); return; }
+    codeRef.current = data.code; setCode(data.code); setState(data);
+    subscribe(data.code);
+    setView("waiting");
+  }
+
+  async function handleJoin() {
+    if (!supabase) { setError("Online play is unavailable right now."); return; }
+    const c = joinInput.trim().toUpperCase();
+    if (c.length !== 5) { setError("Enter your friend's 5-character code."); return; }
+    setBusy(true); setError("");
+    seatRef.current = newSeat();
+    const { data, error } = await supabase.rpc("join_match", { p_code: c, p_seat: seatRef.current });
+    setBusy(false);
+    if (error) { setError(error.message); return; }
+    codeRef.current = data.code; setCode(data.code); setState(data);
+    subscribe(data.code, () => poke());  // notify the creator once we're subscribed
+    setView("connected");
+  }
+
+  // While waiting, also poll every few seconds as a fallback if a poke is missed.
+  useEffect(() => {
+    if (view !== "waiting") return;
+    const t = setInterval(() => refresh(), 2500);
+    return () => clearInterval(t);
+  }, [view]);
+
+  // Creator: flip to the game as soon as an opponent has joined.
+  useEffect(() => {
+    if (view === "waiting" && state?.status === "active" && state?.oJoined) {
+      if (haptics) haptic("medium");
+      setView("connected");
+    }
+  }, [state, view, haptics]);
+
+  async function leaveAndHome() {
+    if (codeRef.current && seatRef.current) {
+      try { await supabase.rpc("leave_match", { p_code: codeRef.current, p_seat: seatRef.current }); } catch {}
+      poke();
+    }
+    if (channelRef.current) { supabase.removeChannel(channelRef.current); channelRef.current = null; }
+    onHome();
+  }
+
+  function copyCode() {
+    try { navigator.clipboard?.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+  }
+
+  // Header used on every online view.
+  const header = (title, onBack) => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, flexShrink: 0 }}>
+      <div>
+        <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint }}>ONLINE</div>
+        <div style={{ fontSize: "22px", fontWeight: "900", letterSpacing: "-0.02em", color: theme.text }}>{title}</div>
+      </div>
+      <button onClick={onBack} style={{ ...mkBtn(false, theme), padding: "8px 18px", fontSize: "11px" }}>← {onBack === onHome ? "Home" : "Leave"}</button>
+    </div>
+  );
+
+  // height:100dvh in normal flow (NOT position:fixed) — the root wraps screens in
+  // an animated div whose leftover transform would otherwise collapse a fixed
+  // child to zero height. This matches HomeScreen/GameScreen.
+  const wrap = (children) => (
+    <div style={{
+      height: "100dvh", width: "100%", boxSizing: "border-box",
+      background: theme.bg, color: theme.text, fontFamily: "'Courier New', monospace",
+      display: "flex", flexDirection: "column", overflow: "hidden",
+      paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)",
+    }}>{children}</div>
+  );
+
+  // ── HUB: Create / Join / Matchmaking(disabled) ──
+  if (view === "hub") {
+    const card = (emoji, title, sub, onClick, disabled, badge) => (
+      <button key={title} onClick={disabled ? undefined : onClick} style={{
+        width: "100%", textAlign: "left", cursor: disabled ? "default" : "pointer",
+        background: theme.surface, border: `2px solid ${theme.border}`, borderRadius: "14px",
+        padding: "16px", display: "flex", alignItems: "center", gap: "14px",
+        opacity: disabled ? 0.5 : 1, transition: "all 0.2s", fontFamily: "'Courier New', monospace",
+      }}
+        onMouseEnter={e => { if (!disabled) e.currentTarget.style.borderColor = ONLINE_ACCENT; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = theme.border; }}
+      >
+        <div style={{ width: "44px", height: "44px", borderRadius: "12px", flexShrink: 0, background: dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px" }}>{emoji}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{ fontSize: "16px", fontWeight: "800", color: theme.text }}>{title}</div>
+            {badge && <span style={{ fontSize: "8px", letterSpacing: "0.15em", textTransform: "uppercase", color: theme.textFaint, border: `1px solid ${theme.border}`, borderRadius: "6px", padding: "2px 6px" }}>{badge}</span>}
+          </div>
+          <div style={{ fontSize: "11px", color: theme.textDim, lineHeight: 1.4, marginTop: "2px" }}>{sub}</div>
+        </div>
+      </button>
+    );
+    return wrap(
+      <>
+        {header("Play Online", onHome)}
+        <div style={{ flex: 1, overflowY: "auto", padding: "20px", maxWidth: "440px", width: "100%", margin: "0 auto", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "10px" }}>
+          {!user && (
+            <div style={{ fontSize: "11px", color: theme.textDim, lineHeight: 1.6, marginBottom: "6px", padding: "10px 12px", border: `1px solid ${theme.border}`, borderRadius: "10px", background: theme.surface }}>
+              <b style={{ color: ONLINE_ACCENT }}>Guests can play online</b> — tap Create or Join below to start. Signing in is optional; it just lets your online wins count toward your stats.
+            </div>
+          )}
+          {card("➕", "Create Match", "Get a code to share with a friend", handleCreate, false, null)}
+          {card("🔑", "Join Match", "Enter a friend's code", () => { setError(""); setView("join"); }, false, null)}
+          {card("🎯", "Matchmaking", "Get matched with a random player", null, true, "Coming soon")}
+          {error && <div style={{ fontSize: "11px", color: CLR.X, marginTop: "6px" }}>{error}</div>}
+        </div>
+      </>
+    );
+  }
+
+  // ── WAITING: creator sees the code, waits for a join ──
+  if (view === "waiting") {
+    return wrap(
+      <>
+        {header("Waiting", leaveAndHome)}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px", textAlign: "center" }}>
+          <div style={{ fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: theme.textFaint, marginBottom: "14px" }}>Your match code</div>
+          <button onClick={copyCode} title="Tap to copy" style={{
+            background: theme.surface, border: `2px solid ${ONLINE_ACCENT}`, borderRadius: "16px",
+            padding: "18px 28px", cursor: "pointer", fontFamily: "'Courier New', monospace",
+            fontSize: "clamp(34px, 12vw, 52px)", fontWeight: "900", letterSpacing: "0.28em",
+            color: theme.text, marginBottom: "8px",
+          }}>{code}</button>
+          <div style={{ fontSize: "10px", color: copied ? ONLINE_ACCENT : theme.textFaint, height: "14px", marginBottom: "26px", transition: "color 0.2s" }}>
+            {copied ? "Copied!" : "Tap the code to copy"}
+          </div>
+          <div style={{ fontSize: "14px", color: theme.textDim }}>
+            Waiting for opponent{".".repeat(dots)}<span style={{ opacity: 0 }}>{".".repeat(3 - dots)}</span>
+          </div>
+          <div style={{ marginTop: "8px", fontSize: "10px", color: theme.textFaint, lineHeight: 1.6, maxWidth: "260px" }}>
+            Share the code. The game starts automatically when they join. Code expires in 10 minutes.
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── JOIN: enter a code ──
+  if (view === "join") {
+    return wrap(
+      <>
+        {header("Join a Match", onHome)}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px", maxWidth: "360px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+          <div style={{ fontSize: "13px", color: theme.textDim, marginBottom: "16px", textAlign: "center", lineHeight: 1.6 }}>
+            Enter the 5-character code your friend shared.
+          </div>
+          <input
+            value={joinInput}
+            onChange={e => setJoinInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5))}
+            placeholder="CODE" maxLength={5} autoFocus
+            onKeyDown={e => { if (e.key === "Enter") handleJoin(); }}
+            style={{
+              width: "100%", boxSizing: "border-box", textAlign: "center",
+              background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: "12px",
+              padding: "16px", fontSize: "30px", fontWeight: "900", letterSpacing: "0.3em",
+              color: theme.text, fontFamily: "'Courier New', monospace", outline: "none", marginBottom: "12px",
+            }}
+            onFocus={e => e.currentTarget.style.borderColor = ONLINE_ACCENT}
+            onBlur={e => e.currentTarget.style.borderColor = theme.border}
+          />
+          {error && <div style={{ fontSize: "11px", color: CLR.X, marginBottom: "10px", textAlign: "center", lineHeight: 1.5 }}>{error}</div>}
+          <button onClick={handleJoin} disabled={busy} style={{
+            width: "100%", padding: "14px",
+            background: `linear-gradient(135deg, #38bdf8, #0284c7)`, border: "none", borderRadius: "12px",
+            color: "#fff", fontSize: "13px", fontWeight: "900", letterSpacing: "0.15em", textTransform: "uppercase",
+            cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: "'Courier New', monospace",
+          }}>{busy ? "…" : "Join"}</button>
+          <button onClick={() => { setError(""); setJoinInput(""); setView("hub"); }} {...linkBtnProps(theme)} style={{ ...linkBtnProps(theme).style, marginTop: "14px" }}>
+            Back
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  // ── CONNECTED (Step 2 placeholder — the live board arrives in Step 3) ──
+  const oppName = state ? (state.you === "X" ? state.names.O : state.names.X) : null;
+  return wrap(
+    <>
+      {header("Match", leaveAndHome)}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px", textAlign: "center" }}>
+        <div style={{ fontSize: "40px", marginBottom: "12px" }}>✅</div>
+        <div style={{ fontSize: "18px", fontWeight: "900", color: ONLINE_ACCENT, marginBottom: "8px" }}>Match found!</div>
+        <div style={{ fontSize: "13px", color: theme.textDim, lineHeight: 1.7 }}>
+          You are <b style={{ color: state?.you === "X" ? CLR.X : CLR.O }}>{state?.you}</b><br/>
+          Opponent: <b style={{ color: theme.text }}>{oppName || "Guest"}</b>
+        </div>
+        <div style={{ fontSize: "11px", color: theme.textFaint, marginTop: "20px", lineHeight: 1.6, maxWidth: "260px" }}>
+          The live game board is the next step — for now this just confirms both players connected.
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ROOT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
@@ -1872,6 +2135,7 @@ export default function App() {
 
   function handleStart(cfg) {
     setConfig(cfg);
+    if (cfg.mode === "online") { setScreen("online"); return; } // skip the pregame animation
     setScreen("pregame");
     setTimeout(() => setScreen("game"), 2000);
   }
@@ -1894,6 +2158,15 @@ export default function App() {
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.4s ease both" }}>
         <GameScreen config={config} onHome={handleHome} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} user={user} />
+      </div>
+    </>
+  );
+
+  if (screen === "online") return (
+    <>
+      <style>{GLOBAL_STYLES}</style>
+      <div style={{ animation: "screenIn 0.4s ease both" }}>
+        <OnlinePlay dark={dark} haptics={haptics} sfxVolume={sfxVolume} user={user} username={username} onHome={handleHome} />
       </div>
     </>
   );
