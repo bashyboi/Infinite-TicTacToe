@@ -328,6 +328,7 @@ function AuthModal({ dark, theme, onClose }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError(""); setNotice("");
+    if (!supabase) { setError("Sign-in is temporarily unavailable."); return; }
     if (!email || !password) { setError("Enter an email and password."); return; }
     if (isSignup && password.length < 6) { setError("Password must be at least 6 characters."); return; }
 
@@ -366,6 +367,7 @@ function AuthModal({ dark, theme, onClose }) {
 
   async function signInWithProvider(provider) {
     setError(""); setNotice("");
+    if (!supabase) { setError("Sign-in is temporarily unavailable."); return; }
     // After Google approves, Supabase sends the user back to this same page.
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
@@ -1283,6 +1285,7 @@ export default function App() {
   // Auth: load any existing session, then listen for login/logout changes.
   // This runs once and keeps `user` in sync — guests simply stay null.
   useEffect(() => {
+    if (!supabase) return; // auth unavailable (missing keys) — stay a guest, no crash
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
@@ -1290,7 +1293,7 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  const handleLogout = async () => { await supabase.auth.signOut(); };
+  const handleLogout = async () => { if (supabase) await supabase.auth.signOut(); };
 
   // Splash → home
   useEffect(() => {
