@@ -281,6 +281,20 @@ function AboutModal({ dark, onClose, theme }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GOOGLE "G" LOGO (official 4-color mark)
+// ─────────────────────────────────────────────────────────────────────────────
+function GoogleGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/>
+      <path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/>
+      <path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"/>
+      <path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/>
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AUTH MODAL (login / sign up)
 // Mirrors AboutModal's look: dim overlay, bordered card, Courier New.
 // Handles email + password now. Social sign-in (Google, later Apple) plugs into
@@ -339,6 +353,26 @@ function AuthModal({ dark, theme, onClose }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  // ── SOCIAL SIGN-IN ──────────────────────────────────────────────────────────
+  // Google is live. Apple is intentionally disabled until an Apple Developer
+  // account is set up — flip `enabled: true` (and configure Apple in Supabase)
+  // and it appears automatically. No other code changes needed.
+  const SOCIAL_PROVIDERS = [
+    { id: "google", label: "Continue with Google", enabled: true },
+    { id: "apple",  label: "Continue with Apple",  enabled: false },
+  ];
+
+  async function signInWithProvider(provider) {
+    setError(""); setNotice("");
+    // After Google approves, Supabase sends the user back to this same page.
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: window.location.origin },
+    });
+    // On success the browser redirects away, so we only reach here on error.
+    if (error) setError(error.message);
   }
 
   // Tab button for switching between Log in / Sign up
@@ -443,10 +477,42 @@ function AuthModal({ dark, theme, onClose }) {
           </button>
         </form>
 
-        {/* ── SOCIAL SIGN-IN (Google / Apple) — added in the next step ──────────
-            When ready, a divider + provider buttons go here. They call
-            supabase.auth.signInWithOAuth({ provider: "google" | "apple" }).
-            Nothing above needs to change. ------------------------------------- */}
+        {/* ── SOCIAL SIGN-IN ── */}
+        {SOCIAL_PROVIDERS.some(p => p.enabled) && (
+          <>
+            {/* "or" divider */}
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", margin: "18px 0 14px" }}>
+              <div style={{ flex: 1, height: "1px", background: theme.border }} />
+              <span style={{ fontSize: "10px", letterSpacing: "0.2em", color: theme.textFaint }}>OR</span>
+              <div style={{ flex: 1, height: "1px", background: theme.border }} />
+            </div>
+
+            {SOCIAL_PROVIDERS.filter(p => p.enabled).map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => signInWithProvider(p.id)}
+                style={{
+                  width: "100%", marginBottom: "8px", padding: "12px",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: "10px",
+                  background: theme.surface,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: "12px",
+                  color: theme.text, fontSize: "13px",
+                  letterSpacing: "0.06em",
+                  cursor: "pointer", fontFamily: "'Courier New', monospace",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = theme.hover}
+                onMouseLeave={e => e.currentTarget.style.background = theme.surface}
+              >
+                {p.id === "google" && <GoogleGlyph />}
+                {p.id === "apple"  && <span style={{ fontSize: "15px" }}></span>}
+                {p.label}
+              </button>
+            ))}
+          </>
+        )}
 
         <button
           type="button" onClick={onClose}
