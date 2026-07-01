@@ -1849,9 +1849,16 @@ function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
   const [copied, setCopied] = useState(false);
   const [dots, setDots]   = useState(1);
 
+  const [endedReason, setEndedReason] = useState(null); // why the match ended (ended view)
+
   const seatRef    = useRef(null);
   const channelRef = useRef(null);
   const codeRef    = useRef("");   // always-current code for callbacks
+  const viewRef    = useRef("hub");// always-current view for realtime callbacks
+  const leftByMe   = useRef(false);// did I initiate the leave? (don't self-notify)
+  const prevMove   = useRef(0);    // last seen moveCount (for opponent-move sound)
+
+  useEffect(() => { viewRef.current = view; }, [view]);
 
   // Animated "…" for the waiting screen.
   useEffect(() => {
@@ -1863,28 +1870,64 @@ function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
   // Tear down the realtime channel if the component unmounts.
   useEffect(() => () => { if (channelRef.current) supabase.removeChannel(channelRef.current); }, []);
 
+  // Move the match to the "ended" screen (unless I'm the one leaving).
+  function endMatch(reason) {
+    if (leftByMe.current || viewRef.current === "ended") return;
+    setEndedReason(reason);
+    setView("ended");
+  }
+
   async function refresh(c = codeRef.current, seat = seatRef.current) {
     if (!c || !seat) return null;
     const { data, error } = await supabase.rpc("get_match", { p_code: c, p_seat: seat });
-    if (!error && data) setState(data);
+    if (error || !data) return null;
+    // Subtle sound when the opponent's move arrives.
+    if (data.moveCount > prevMove.current && viewRef.current === "game" && sfxVolume > 0) {
+      playSfx(data.roundWinner ? "win" : "place", sfxVolume);
+    }
+    prevMove.current = data.moveCount;
+    setState(data);
+    if (data.status === "ended" && viewRef.current === "game") endMatch("opponent-left");
     return data;
   }
 
   // Subscribe to this match's channel. onReady fires once we're actually live.
+  // Also uses Presence to notice when the opponent drops off unexpectedly.
   function subscribe(c, onReady) {
     if (channelRef.current) supabase.removeChannel(channelRef.current);
-    const ch = supabase.channel(`match:${c}`, { config: { broadcast: { self: false } } });
-    ch.on("broadcast", { event: "sync" }, () => refresh())
-      .subscribe((status) => { if (status === "SUBSCRIBED" && onReady) onReady(); });
+    const ch = supabase.channel(`match:${c}`, { config: { broadcast: { self: false }, presence: { key: seatRef.current } } });
+    ch.on("broadcast", { event: "sync" }, () => refresh());
+    ch.on("presence", { event: "leave" }, () => {
+      // Debounce: a brief network blip fires leave then join. Only react if the
+      // opponent is still gone ~1.5s later.
+      setTimeout(async () => {
+        if (leftByMe.current || viewRef.current !== "game") return;
+        const st = channelRef.current?.presenceState?.() || {};
+        const others = Object.keys(st).filter(k => k !== seatRef.current);
+        if (others.length === 0) {
+          const data = await refresh();
+          endMatch(data?.status === "ended" ? "opponent-left" : "opponent-disconnected");
+        }
+      }, 1500);
+    });
+    ch.subscribe((status) => {
+      if (status === "SUBSCRIBED") { ch.track({ seat: seatRef.current }); onReady && onReady(); }
+      else if ((status === "CHANNEL_ERROR" || status === "TIMED_OUT") && viewRef.current === "game") {
+        endMatch("connection-lost");
+      }
+    });
     channelRef.current = ch;
   }
   function poke() {
     channelRef.current?.send({ type: "broadcast", event: "sync", payload: {} });
   }
 
+  // Reset per-match refs before starting/joining a new match.
+  function resetMatch() { leftByMe.current = false; prevMove.current = 0; setEndedReason(null); }
+
   async function handleCreate() {
     if (!supabase) { setError("Online play is unavailable right now."); return; }
-    setBusy(true); setError("");
+    setBusy(true); setError(""); resetMatch();
     seatRef.current = newSeat();
     const { data, error } = await supabase.rpc("create_match", { p_seat: seatRef.current });
     setBusy(false);
@@ -1898,14 +1941,41 @@ function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
     if (!supabase) { setError("Online play is unavailable right now."); return; }
     const c = joinInput.trim().toUpperCase();
     if (c.length !== 5) { setError("Enter your friend's 5-character code."); return; }
-    setBusy(true); setError("");
+    setBusy(true); setError(""); resetMatch();
     seatRef.current = newSeat();
     const { data, error } = await supabase.rpc("join_match", { p_code: c, p_seat: seatRef.current });
     setBusy(false);
     if (error) { setError(error.message); return; }
-    codeRef.current = data.code; setCode(data.code); setState(data);
+    codeRef.current = data.code; setCode(data.code); setState(data); prevMove.current = data.moveCount;
     subscribe(data.code, () => poke());  // notify the creator once we're subscribed
-    setView("connected");
+    setView("game");
+  }
+
+  // Make a move: the server validates & computes it; we broadcast a poke so the
+  // opponent refetches the authoritative state.
+  async function doOnlineMove(idx) {
+    const s = state;
+    if (!s || s.status !== "active" || s.roundWinner || s.turn !== s.you || s.board[idx]) return;
+    if (haptics) haptic("light");
+    const { data, error } = await supabase.rpc("make_move", { p_code: codeRef.current, p_seat: seatRef.current, p_idx: idx });
+    if (error || !data) { refresh(); return; }
+    if (sfxVolume > 0) playSfx(data.roundWinner ? "win" : "place", sfxVolume);
+    prevMove.current = data.moveCount; setState(data); poke();
+  }
+
+  // Rematch requires BOTH players. This marks my readiness; the round only
+  // resets once the opponent has also asked.
+  async function playAgain() {
+    const { data, error } = await supabase.rpc("request_rematch", { p_code: codeRef.current, p_seat: seatRef.current });
+    if (error || !data) { refresh(); return; }
+    prevMove.current = data.moveCount; setState(data); poke();
+  }
+
+  // Leave the channel without ending the match on the server (used from the
+  // ended screen, where the match is already over).
+  function cleanupAndHome() {
+    if (channelRef.current) { supabase.removeChannel(channelRef.current); channelRef.current = null; }
+    onHome();
   }
 
   // While waiting, also poll every few seconds as a fallback if a poke is missed.
@@ -1915,15 +1985,25 @@ function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
     return () => clearInterval(t);
   }, [view]);
 
+  // In-game safety net: reconcile state periodically in case a realtime poke is
+  // dropped on a flaky connection (also catches the match ending).
+  useEffect(() => {
+    if (view !== "game") return;
+    const t = setInterval(() => refresh(), 4000);
+    return () => clearInterval(t);
+  }, [view]);
+
   // Creator: flip to the game as soon as an opponent has joined.
   useEffect(() => {
     if (view === "waiting" && state?.status === "active" && state?.oJoined) {
       if (haptics) haptic("medium");
-      setView("connected");
+      prevMove.current = state.moveCount;
+      setView("game");
     }
   }, [state, view, haptics]);
 
   async function leaveAndHome() {
+    leftByMe.current = true;
     if (codeRef.current && seatRef.current) {
       try { await supabase.rpc("leave_match", { p_code: codeRef.current, p_seat: seatRef.current }); } catch {}
       poke();
@@ -1937,15 +2017,21 @@ function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
   }
 
   // Header used on every online view.
-  const header = (title, onBack) => (
+  const header = (title, onBack, backLabel) => (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, flexShrink: 0 }}>
       <div>
         <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint }}>ONLINE</div>
         <div style={{ fontSize: "22px", fontWeight: "900", letterSpacing: "-0.02em", color: theme.text }}>{title}</div>
       </div>
-      <button onClick={onBack} style={{ ...mkBtn(false, theme), padding: "8px 18px", fontSize: "11px" }}>← {onBack === onHome ? "Home" : "Leave"}</button>
+      <button onClick={onBack} style={{ ...mkBtn(false, theme), padding: "8px 18px", fontSize: "11px" }}>← {backLabel ?? (onBack === onHome ? "Home" : "Leave")}</button>
     </div>
   );
+
+  // Oldest mark (fades when a player has the max of 3) — matches the local game.
+  const fadedIdx = (board, player) => {
+    const marks = board.map((c, i) => (c && c.player === player ? { i, age: c.age } : null)).filter(Boolean).sort((a, b) => a.age - b.age);
+    return marks.length === MAX_MARKS ? marks[0].i : null;
+  };
 
   // height:100dvh in normal flow (NOT position:fixed) — the root wraps screens in
   // an animated div whose leftover transform would otherwise collapse a fixed
@@ -2064,24 +2150,132 @@ function OnlinePlay({ dark, haptics, sfxVolume, user, username, onHome }) {
     );
   }
 
-  // ── CONNECTED (Step 2 placeholder — the live board arrives in Step 3) ──
-  const oppName = state ? (state.you === "X" ? state.names.O : state.names.X) : null;
-  return wrap(
-    <>
-      {header("Match", leaveAndHome)}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px", textAlign: "center" }}>
-        <div style={{ fontSize: "40px", marginBottom: "12px" }}>✅</div>
-        <div style={{ fontSize: "18px", fontWeight: "900", color: ONLINE_ACCENT, marginBottom: "8px" }}>Match found!</div>
-        <div style={{ fontSize: "13px", color: theme.textDim, lineHeight: 1.7 }}>
-          You are <b style={{ color: state?.you === "X" ? CLR.X : CLR.O }}>{state?.you}</b><br/>
-          Opponent: <b style={{ color: theme.text }}>{oppName || "Guest"}</b>
+  // ── ENDED / DISCONNECTED ──
+  if (view === "ended") {
+    const info = {
+      "opponent-left":         { icon: "👋", title: "Opponent left",        msg: "Your opponent ended the match." },
+      "opponent-disconnected": { icon: "📡", title: "Opponent disconnected", msg: "They may have lost connection or closed the game." },
+      "connection-lost":       { icon: "⚠️", title: "Connection lost",       msg: "We lost the connection to the match. Check your internet, then start a new game." },
+    }[endedReason] || { icon: "🚪", title: "Match ended", msg: "This match has ended." };
+    return wrap(
+      <>
+        {header("Match Ended", cleanupAndHome, "Home")}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px", textAlign: "center" }}>
+          <div style={{ fontSize: "48px", marginBottom: "14px" }}>{info.icon}</div>
+          <div style={{ fontSize: "20px", fontWeight: "900", color: theme.text, marginBottom: "8px" }}>{info.title}</div>
+          <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.7, maxWidth: "280px", marginBottom: "8px" }}>{info.msg}</div>
+          {state && (
+            <div style={{ fontSize: "12px", color: theme.textFaint, marginBottom: "26px" }}>
+              Final score — You {state.you === "X" ? state.scores.X : state.scores.O} · Opponent {state.you === "X" ? state.scores.O : state.scores.X}
+            </div>
+          )}
+          <button onClick={cleanupAndHome} style={{ ...mkBtn(true, theme), padding: "12px 28px" }}>Back to Home</button>
         </div>
-        <div style={{ fontSize: "11px", color: theme.textFaint, marginTop: "20px", lineHeight: 1.6, maxWidth: "260px" }}>
-          The live game board is the next step — for now this just confirms both players connected.
+      </>
+    );
+  }
+
+  // ── GAME (live board) ──
+  {
+    const s = state;
+    if (!s) return wrap(<>{header("Match", leaveAndHome)}<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: theme.textDim }}>Loading…</div></>);
+    const oppName = (s.you === "X" ? s.names.O : s.names.X) || "Guest";
+    const meName  = username || "You";
+    const board   = s.board;
+    const myTurn  = s.status === "active" && !s.roundWinner && s.turn === s.you;
+    const xFade   = fadedIdx(board, "X");
+    const oFade   = fadedIdx(board, "O");
+    const won     = s.roundWinner;
+    const oppLetter = s.you === "X" ? "O" : "X";
+    const youReady  = !!s.rematch?.[s.you];      // I asked for a rematch
+    const oppReady  = !!s.rematch?.[oppLetter];  // opponent asked for a rematch
+
+    // Per-player header cell (color, name, score, turn indicator).
+    const playerTag = (p) => {
+      const isYou = p === s.you;
+      const active = s.status === "active" && !won && s.turn === p;
+      return (
+        <div style={{ textAlign: "center", minWidth: "88px" }}>
+          <div style={{ fontSize: "10px", letterSpacing: "0.15em", color: p === "X" ? CLR.X : CLR.O, marginBottom: "2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "120px" }}>
+            {p} · {isYou ? meName : oppName}
+          </div>
+          <div style={{ fontSize: "30px", fontWeight: "900", lineHeight: 1, color: theme.text }}>{p === "X" ? s.scores.X : s.scores.O}</div>
+          <div style={{ fontSize: "8px", letterSpacing: "0.2em", color: active ? theme.textDim : theme.textFaint, marginTop: "3px", minHeight: "12px", textTransform: "uppercase" }}>
+            {won === p ? "WON" : active ? (isYou ? "YOUR TURN" : "…") : ""}
+          </div>
         </div>
+      );
+    };
+
+    const boardGrid = (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px" }}>
+        {board.map((cell, idx) => {
+          const isWin  = won && s.winLine?.includes(idx);
+          const isFade = idx === xFade || idx === oFade;
+          const color  = cell?.player === "X" ? CLR.X : CLR.O;
+          const clickable = myTurn && !cell;
+          return (
+            <button key={idx} onClick={() => clickable && doOnlineMove(idx)} style={{
+              width: "clamp(84px, 22vw, 108px)", height: "clamp(84px, 22vw, 108px)",
+              background: isWin ? (cell?.player === "X" ? "rgba(255,107,107,0.13)" : "rgba(116,185,255,0.13)") : theme.surface,
+              border: `2px solid ${isWin ? color : theme.border}`, borderRadius: "12px",
+              cursor: clickable ? "pointer" : "default",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "clamp(30px, 8vw, 44px)", fontWeight: "900",
+              color: cell ? (isFade ? `${color}3a` : isWin ? color : `${color}cc`) : "transparent",
+              transition: "background 0.15s, color 0.2s, box-shadow 0.2s", outline: "none",
+              boxShadow: isWin ? `0 0 22px ${color}44` : "none",
+            }}
+              onMouseEnter={e => { if (clickable) e.currentTarget.style.background = theme.hover; }}
+              onMouseLeave={e => { if (!isWin) e.currentTarget.style.background = theme.surface; }}
+            >{cell?.player ?? ""}</button>
+          );
+        })}
       </div>
-    </>
-  );
+    );
+
+    return wrap(
+      <>
+        {header("Match", leaveAndHome)}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px", gap: "22px", overflowY: "auto" }}>
+          <div style={{ display: "flex", gap: "40px", alignItems: "center" }}>
+            {playerTag("X")}
+            {playerTag("O")}
+          </div>
+
+          {boardGrid}
+
+          <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "12px", minHeight: "60px" }}>
+            {won ? (
+              <>
+                <div style={{ fontSize: "clamp(16px, 4vw, 22px)", fontWeight: "900", color: won === s.you ? ONLINE_ACCENT : (won === "X" ? CLR.X : CLR.O), letterSpacing: "0.05em" }}>
+                  {won === s.you ? "You win!" : `${oppName} wins`}
+                </div>
+                {youReady ? (
+                  <div style={{ fontSize: "12px", color: theme.textDim, letterSpacing: "0.05em" }}>
+                    Waiting for {oppName} to play again…
+                  </div>
+                ) : (
+                  <>
+                    {oppReady && (
+                      <div style={{ fontSize: "12px", fontWeight: "700", color: ONLINE_ACCENT }}>
+                        {oppName} wants to play again!
+                      </div>
+                    )}
+                    <button onClick={playAgain} style={{ ...mkBtn(true, theme), padding: "10px 24px" }}>Play again</button>
+                  </>
+                )}
+              </>
+            ) : (
+              <div style={{ fontSize: "12px", color: theme.textDim, letterSpacing: "0.08em" }}>
+                {myTurn ? "Your turn" : `Waiting for ${oppName}…`}
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
