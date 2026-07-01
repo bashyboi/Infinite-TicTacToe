@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase } from "./supabaseClient";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS & PURE HELPERS
@@ -280,9 +281,195 @@ function AboutModal({ dark, onClose, theme }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AUTH MODAL (login / sign up)
+// Mirrors AboutModal's look: dim overlay, bordered card, Courier New.
+// Handles email + password now. Social sign-in (Google, later Apple) plugs into
+// the clearly-marked SOCIAL SIGN-IN section below — nothing else needs to change.
+// ─────────────────────────────────────────────────────────────────────────────
+function AuthModal({ dark, theme, onClose }) {
+  const [mode, setMode]         = useState("login"); // "login" | "signup"
+  const [email, setEmail]       = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState("");
+  const [notice, setNotice]     = useState(""); // e.g. "check your email"
+
+  const isSignup = mode === "signup";
+
+  // Shared text-input style — matches the bordered, monospace look.
+  const inputStyle = {
+    width: "100%", boxSizing: "border-box",
+    background: theme.surface,
+    border: `1px solid ${theme.border}`,
+    borderRadius: "10px",
+    padding: "12px 14px",
+    fontSize: "13px",
+    color: theme.text,
+    fontFamily: "'Courier New', monospace",
+    outline: "none",
+    transition: "border-color 0.2s",
+    marginBottom: "10px",
+  };
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError(""); setNotice("");
+    if (!email || !password) { setError("Enter an email and password."); return; }
+    if (isSignup && password.length < 6) { setError("Password must be at least 6 characters."); return; }
+
+    setLoading(true);
+    try {
+      if (isSignup) {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) { setError(error.message); return; }
+        // If email confirmation is ON, there's no session yet — tell the user.
+        if (!data.session) {
+          setNotice("Account created! Check your email to confirm, then log in.");
+          setMode("login");
+        } else {
+          onClose(); // confirmation OFF → logged in immediately
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) { setError(error.message); return; }
+        onClose(); // onAuthStateChange updates the app; menu will show the account
+      }
+    } catch (err) {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Tab button for switching between Log in / Sign up
+  const tab = (label, value) => {
+    const active = mode === value;
+    return (
+      <button
+        type="button"
+        onClick={() => { setMode(value); setError(""); setNotice(""); }}
+        style={{
+          flex: 1, padding: "9px",
+          background: active ? (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)") : "transparent",
+          border: `2px solid ${active ? (dark ? "#666" : "#888") : theme.border}`,
+          borderRadius: "10px",
+          color: active ? theme.text : theme.textDim,
+          fontSize: "12px", letterSpacing: "0.12em", textTransform: "uppercase",
+          cursor: "pointer", fontFamily: "'Courier New', monospace",
+          transition: "all 0.2s",
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "24px",
+        animation: "fadeIn 0.2s ease both",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: theme.menuBg,
+          border: `1px solid ${theme.border}`,
+          borderRadius: "20px",
+          padding: "28px 24px",
+          maxWidth: "340px", width: "100%",
+          fontFamily: "'Courier New', monospace",
+          animation: "screenIn 0.25s ease both",
+        }}
+      >
+        <div style={{ fontSize: "10px", letterSpacing: "0.35em", color: theme.textFaint, marginBottom: "4px" }}>ACCOUNT</div>
+        <div style={{ fontSize: "22px", fontWeight: "900", color: theme.text, letterSpacing: "-0.02em", marginBottom: "6px" }}>
+          {isSignup ? "Create account" : "Welcome back"}
+        </div>
+        <div style={{ fontSize: "11px", color: theme.textFaint, marginBottom: "20px", lineHeight: 1.6 }}>
+          {isSignup ? "Sign up to save your stats across devices." : "Log in to sync your saved stats."}
+        </div>
+
+        {/* Log in / Sign up tabs */}
+        <div style={{ display: "flex", gap: "8px", marginBottom: "18px" }}>
+          {tab("Log in", "login")}
+          {tab("Sign up", "signup")}
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <input
+            type="email" value={email} onChange={e => setEmail(e.target.value)}
+            placeholder="Email" autoComplete="email"
+            style={inputStyle}
+            onFocus={e => e.currentTarget.style.borderColor = CLR.O}
+            onBlur={e => e.currentTarget.style.borderColor = theme.border}
+          />
+          <input
+            type="password" value={password} onChange={e => setPassword(e.target.value)}
+            placeholder="Password" autoComplete={isSignup ? "new-password" : "current-password"}
+            style={{ ...inputStyle, marginBottom: "6px" }}
+            onFocus={e => e.currentTarget.style.borderColor = CLR.O}
+            onBlur={e => e.currentTarget.style.borderColor = theme.border}
+          />
+
+          {error && (
+            <div style={{ fontSize: "11px", color: CLR.X, lineHeight: 1.5, margin: "6px 2px 4px" }}>{error}</div>
+          )}
+          {notice && (
+            <div style={{ fontSize: "11px", color: CLR.O, lineHeight: 1.5, margin: "6px 2px 4px" }}>{notice}</div>
+          )}
+
+          <button
+            type="submit" disabled={loading}
+            style={{
+              width: "100%", marginTop: "12px", padding: "13px",
+              background: dark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)",
+              border: `2px solid ${dark ? "#666" : "#888"}`,
+              borderRadius: "12px",
+              color: theme.text, fontSize: "13px", fontWeight: "700",
+              letterSpacing: "0.15em", textTransform: "uppercase",
+              cursor: loading ? "default" : "pointer",
+              opacity: loading ? 0.6 : 1,
+              fontFamily: "'Courier New', monospace",
+              transition: "all 0.2s",
+            }}
+          >
+            {loading ? "…" : isSignup ? "Sign up" : "Log in"}
+          </button>
+        </form>
+
+        {/* ── SOCIAL SIGN-IN (Google / Apple) — added in the next step ──────────
+            When ready, a divider + provider buttons go here. They call
+            supabase.auth.signInWithOAuth({ provider: "google" | "apple" }).
+            Nothing above needs to change. ------------------------------------- */}
+
+        <button
+          type="button" onClick={onClose}
+          style={{
+            width: "100%", marginTop: "12px", padding: "10px",
+            background: "transparent",
+            border: "none",
+            color: theme.textFaint, fontSize: "11px",
+            letterSpacing: "0.1em", textTransform: "uppercase",
+            cursor: "pointer", fontFamily: "'Courier New', monospace",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MENU COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, theme }) {
+function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, theme, user, onOpenAuth, onLogout }) {
   const [open, setOpen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const menuRef = useRef(null);
@@ -378,6 +565,25 @@ function Menu({ dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVo
             boxShadow: dark ? "0 8px 32px rgba(0,0,0,0.5)" : "0 8px 32px rgba(0,0,0,0.12)",
             overflow: "hidden", animation: "fadeSlideDown 0.15s ease",
           }}>
+            {/* Account */}
+            {sectionLabel("Account")}
+            {user ? (
+              <>
+                <div style={{ padding: "6px 16px 8px", fontFamily: "'Courier New', monospace" }}>
+                  <div style={{ fontSize: "9px", letterSpacing: "0.15em", color: theme.textFaint, textTransform: "uppercase", marginBottom: "2px" }}>
+                    Signed in as
+                  </div>
+                  <div style={{ fontSize: "12px", color: theme.text, wordBreak: "break-all", lineHeight: 1.4 }}>
+                    {user.email}
+                  </div>
+                </div>
+                {menuRow("🚪", "Log out", null, () => { setOpen(false); onLogout(); })}
+              </>
+            ) : (
+              menuRow("👤", "Sign up / Log in", null, () => { setOpen(false); onOpenAuth(); })
+            )}
+
+            {divider()}
             {sectionLabel("Settings")}
             {menuRow(dark ? "🌙" : "☀️", dark ? "Dark mode" : "Light mode", pill(dark), onToggleDark)}
             {menuRow("📳", "Haptic feedback", pill(haptics), onToggleHaptics)}
@@ -443,9 +649,10 @@ function mkBtn(active, theme) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume }) {
+function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, user, onLogout }) {
   const [mode, setMode] = useState(null);
   const [difficulty, setDifficulty] = useState("medium");
+  const [authOpen, setAuthOpen] = useState(false);
   const theme = getTheme(dark);
 
   const difficultyInfo = {
@@ -465,7 +672,7 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
     }}>
       {/* Menu */}
       <div style={{ position: "absolute", top: "16px", right: "16px", zIndex: 10 }}>
-        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} sfxVolume={sfxVolume} onSfxVolume={onSfxVolume} theme={theme} />
+        <Menu dark={dark} onToggleDark={onToggleDark} haptics={haptics} onToggleHaptics={onToggleHaptics} sfxVolume={sfxVolume} onSfxVolume={onSfxVolume} theme={theme} user={user} onOpenAuth={() => setAuthOpen(true)} onLogout={onLogout} />
       </div>
 
       {/* Hero */}
@@ -503,6 +710,25 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 
       {/* Content — scrollable middle */}
       <div style={{ flex: 1, padding: "20px 20px 8px", display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", margin: "0 auto", width: "100%", boxSizing: "border-box", overflowY: "auto", minHeight: 0 }}>
+
+        {/* Subtle sign-in hint — only when logged out, never blocks play */}
+        {!user && (
+          <button
+            onClick={() => setAuthOpen(true)}
+            style={{
+              alignSelf: "center", marginBottom: "16px",
+              background: "transparent", border: "none",
+              color: theme.textFaint, fontSize: "11px",
+              letterSpacing: "0.06em", cursor: "pointer",
+              fontFamily: "'Courier New', monospace",
+              transition: "color 0.2s",
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = theme.textDim}
+            onMouseLeave={e => e.currentTarget.style.color = theme.textFaint}
+          >
+            Sign in to save your stats →
+          </button>
+        )}
 
         {/* Mode label */}
         <div style={{ alignSelf: "flex-start", fontSize: "11px", letterSpacing: "0.2em", color: theme.textDim, marginBottom: "10px", textTransform: "uppercase", fontWeight: "700" }}>
@@ -606,6 +832,9 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
           {mode ? `Play ${mode === "versus" ? "Versus" : "vs Bot"} →` : "Select a mode"}
         </button>
       </div>
+
+      {/* Login / sign up modal */}
+      {authOpen && <AuthModal dark={dark} theme={theme} onClose={() => setAuthOpen(false)} />}
     </div>
   );
 }
@@ -981,8 +1210,21 @@ export default function App() {
   const [dark, setDark]     = useState(true);
   const [haptics, setHaptics] = useState(true);
   const [sfxVolume, setSfxVolume] = useState(0.5);
+  const [user, setUser] = useState(null); // logged-in Supabase user, or null for guests
   const toggleDark = () => setDark(d => !d);
   const toggleHaptics = () => setHaptics(h => !h);
+
+  // Auth: load any existing session, then listen for login/logout changes.
+  // This runs once and keeps `user` in sync — guests simply stay null.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => { await supabase.auth.signOut(); };
 
   // Splash → home
   useEffect(() => {
@@ -1023,7 +1265,7 @@ export default function App() {
     <>
       <style>{GLOBAL_STYLES}</style>
       <div style={{ animation: "screenIn 0.45s ease both" }}>
-        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} />
+        <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} user={user} onLogout={handleLogout} />
       </div>
     </>
   );
