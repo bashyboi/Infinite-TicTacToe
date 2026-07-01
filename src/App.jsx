@@ -817,7 +817,11 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
 
   return (
     <div style={{
-      height: "100dvh", background: theme.bg, color: theme.text,
+      // 100% (of the already safe-area-inset #root), NOT 100dvh — otherwise on
+      // phones with a status bar / home indicator this overflows the safe area
+      // and clips the pinned Play button. The wrapper below is given height:100%
+      // so this resolves.
+      height: "100%", background: theme.bg, color: theme.text,
       fontFamily: "'Courier New', monospace",
       display: "flex", flexDirection: "column",
       overflow: "hidden",
@@ -2368,7 +2372,7 @@ export default function App() {
   return (
     <>
       <style>{GLOBAL_STYLES}</style>
-      <div style={{ animation: "screenIn 0.45s ease both" }}>
+      <div style={{ height: "100%", animation: "screenIn 0.45s ease both" }}>
         <HomeScreen onStart={handleStart} dark={dark} onToggleDark={toggleDark} haptics={haptics} onToggleHaptics={toggleHaptics} sfxVolume={sfxVolume} onSfxVolume={setSfxVolume} user={user} onLogout={handleLogout} username={username} onUsernameSaved={setUsername} />
       </div>
       {/* Required username setup — blocks play until a name is chosen (or logout) */}
