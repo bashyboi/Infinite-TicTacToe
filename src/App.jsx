@@ -799,24 +799,15 @@ function linkBtnProps(theme) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADVERTISING (Google AdSense)
-// Fully inert until VITE_ADSENSE_CLIENT / VITE_ADSENSE_SLOT_HOME are set (after
-// AdSense approval) — no script loads, no console errors, no layout gap.
+// The site-wide verification script lives statically in index.html (Google's
+// crawler needs to find it without running our JS). Rendering an actual ad
+// UNIT here still needs a slot ID, which only exists once approved — until
+// then this renders nothing, no console errors, no layout gap.
 // A future ad-free purchase can hide this by simply not rendering it.
 // ─────────────────────────────────────────────────────────────────────────────
 const ADSENSE_CLIENT   = import.meta.env.VITE_ADSENSE_CLIENT || "";
 const ADSENSE_SLOT_HOME = import.meta.env.VITE_ADSENSE_SLOT_HOME || "";
 const ADS_CONFIGURED = !!(ADSENSE_CLIENT && ADSENSE_SLOT_HOME);
-
-let _adsenseScriptLoaded = false;
-function loadAdsenseScript() {
-  if (_adsenseScriptLoaded || typeof document === "undefined") return;
-  _adsenseScriptLoaded = true;
-  const s = document.createElement("script");
-  s.async = true;
-  s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}`;
-  s.crossOrigin = "anonymous";
-  document.head.appendChild(s);
-}
 
 function AdBanner({ theme }) {
   const insRef = useRef(null);
@@ -824,8 +815,8 @@ function AdBanner({ theme }) {
 
   useEffect(() => {
     if (!ADS_CONFIGURED) return;
-    loadAdsenseScript();
-    // Give the script a beat to attach `window.adsbygoogle`, then request a fill.
+    // The verification script (index.html) is already on the page; just
+    // request a fill for this specific ad slot.
     const t = setTimeout(() => {
       if (pushed.current) return;
       try { (window.adsbygoogle = window.adsbygoogle || []).push({}); pushed.current = true; } catch {}
