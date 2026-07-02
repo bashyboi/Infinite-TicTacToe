@@ -798,6 +798,69 @@ function linkBtnProps(theme) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ADVERTISING (Google AdSense)
+// Fully inert until VITE_ADSENSE_CLIENT / VITE_ADSENSE_SLOT_HOME are set (after
+// AdSense approval) — no script loads, no console errors, no layout gap.
+// A future ad-free purchase can hide this by simply not rendering it.
+// ─────────────────────────────────────────────────────────────────────────────
+const ADSENSE_CLIENT   = import.meta.env.VITE_ADSENSE_CLIENT || "";
+const ADSENSE_SLOT_HOME = import.meta.env.VITE_ADSENSE_SLOT_HOME || "";
+const ADS_CONFIGURED = !!(ADSENSE_CLIENT && ADSENSE_SLOT_HOME);
+
+let _adsenseScriptLoaded = false;
+function loadAdsenseScript() {
+  if (_adsenseScriptLoaded || typeof document === "undefined") return;
+  _adsenseScriptLoaded = true;
+  const s = document.createElement("script");
+  s.async = true;
+  s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}`;
+  s.crossOrigin = "anonymous";
+  document.head.appendChild(s);
+}
+
+function AdBanner({ theme }) {
+  const insRef = useRef(null);
+  const pushed = useRef(false);
+
+  useEffect(() => {
+    if (!ADS_CONFIGURED) return;
+    loadAdsenseScript();
+    // Give the script a beat to attach `window.adsbygoogle`, then request a fill.
+    const t = setTimeout(() => {
+      if (pushed.current) return;
+      try { (window.adsbygoogle = window.adsbygoogle || []).push({}); pushed.current = true; } catch {}
+    }, 60);
+    return () => clearTimeout(t);
+  }, []);
+
+  if (!ADS_CONFIGURED) return null;
+
+  return (
+    <div style={{ width: "100%", margin: "4px 0 16px" }}>
+      <div style={{ fontSize: "9px", letterSpacing: "0.2em", color: theme.textFaint, textTransform: "uppercase", textAlign: "center", marginBottom: "4px" }}>
+        Advertisement
+      </div>
+      <div style={{
+        minHeight: "90px", width: "100%", boxSizing: "border-box",
+        border: `1px solid ${theme.border}`, borderRadius: "10px",
+        background: theme.surface, overflow: "hidden",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <ins
+          ref={insRef}
+          className="adsbygoogle"
+          style={{ display: "block", width: "100%" }}
+          data-ad-client={ADSENSE_CLIENT}
+          data-ad-slot={ADSENSE_SLOT_HOME}
+          data-ad-format="auto"
+          data-full-width-responsive="true"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
 function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfxVolume, onSfxVolume, user, onLogout, username, onUsernameSaved }) {
@@ -973,6 +1036,10 @@ function HomeScreen({ onStart, dark, onToggleDark, haptics, onToggleHaptics, sfx
             })}
           </div>
         </div>
+
+        {/* Ad banner — inside the scrollable area, never affects the pinned
+            Play button below. Renders nothing until AdSense is configured. */}
+        <AdBanner theme={theme} />
       </div>
 
       {/* Play button — pinned at bottom */}
