@@ -1661,35 +1661,56 @@ function RequireUsernameModal({ user, theme, dark, onSaved, onLogout }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // LEADERBOARD SCREEN (full page — global top players per difficulty)
 // ─────────────────────────────────────────────────────────────────────────────
+const ONLINE_METRICS = [
+  { id: "wins",    label: "Most Wins", emoji: "🏆" },
+  { id: "winrate", label: "Win Rate",  emoji: "🎯" },
+  { id: "streak",  label: "Streak",    emoji: "🔥" },
+];
+const VS_BOT_ACCENT = "#34d399";
+
 function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSaved, onSignUp }) {
   const [editing, setEditing]       = useState(false);
   const isMember = !!(user && username); // logged in AND has picked a public name
 
-  // Board
+  // Top-level category, then per-category sub-tab.
+  const [category, setCategory]     = useState("vsBot"); // "vsBot" | "online"
   const [activeDiff, setActiveDiff] = useState("easy");
+  const [onlineMetric, setOnlineMetric] = useState("wins");
+
   const [board, setBoard]           = useState([]);
-  const [myRank, setMyRank]         = useState(null);   // { rank, wins } | null
+  const [myRank, setMyRank]         = useState(null);   // shape varies by category
   const [boardLoading, setBoardLoading] = useState(false);
   const [boardError, setBoardError] = useState("");
 
-  // The top-10 board is public — everyone can see it, including guests.
+  // The top boards are public — everyone can see them, including guests.
   // "My rank" is only fetched for members (it's meaningless without an account).
   useEffect(() => {
     if (!supabase) return;
     let active = true;
     setBoardLoading(true); setBoardError("");
-    Promise.all([
-      supabase.rpc("get_leaderboard", { diff: activeDiff }),
-      isMember ? supabase.rpc("get_my_rank", { diff: activeDiff }) : Promise.resolve({ data: null }),
-    ]).then(([lb, mine]) => {
-      if (!active) return;
-      if (lb.error) { setBoardError(lb.error.message); setBoardLoading(false); return; }
-      setBoard(lb.data ?? []);
-      setMyRank((mine.data && mine.data[0]) ? mine.data[0] : null);
-      setBoardLoading(false);
-    });
+
+    if (category === "vsBot") {
+      Promise.all([
+        supabase.rpc("get_leaderboard", { diff: activeDiff }),
+        isMember ? supabase.rpc("get_my_rank", { diff: activeDiff }) : Promise.resolve({ data: null }),
+      ]).then(([lb, mine]) => {
+        if (!active) return;
+        if (lb.error) { setBoardError(lb.error.message); setBoardLoading(false); return; }
+        setBoard(lb.data ?? []);
+        setMyRank((mine.data && mine.data[0]) ? mine.data[0] : null);
+        setBoardLoading(false);
+      });
+    } else {
+      supabase.rpc("get_online_leaderboard", { p_metric: onlineMetric }).then(({ data, error }) => {
+        if (!active) return;
+        if (error) { setBoardError(error.message); setBoardLoading(false); return; }
+        setBoard(data?.board ?? []);
+        setMyRank(isMember ? (data?.me ?? null) : null);
+        setBoardLoading(false);
+      });
+    }
     return () => { active = false; };
-  }, [activeDiff, isMember]);
+  }, [category, activeDiff, onlineMetric, isMember]);
 
   // ── Change-username form (shown when editing) ──
   const usernameForm = (
@@ -1711,6 +1732,17 @@ function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSav
 
   const medal = (rank) => rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : null;
 
+  // Right-side value shown on a row — depends on category + metric.
+  const rowValue = (r) => {
+    if (category === "vsBot" || onlineMetric === "wins") {
+      return <>{r.wins}<span style={{ fontSize: "10px", color: theme.textFaint, marginLeft: "3px" }}>W</span></>;
+    }
+    if (onlineMetric === "winrate") {
+      return <>{r.winRate}<span style={{ fontSize: "10px", color: theme.textFaint, marginLeft: "2px" }}>%</span></>;
+    }
+    return <>{r.streak}<span style={{ fontSize: "12px", marginLeft: "3px" }}>🔥</span></>;
+  };
+
   // ── One leaderboard row ──
   const boardRow = (r, key) => (
     <div key={key} style={{
@@ -1726,12 +1758,28 @@ function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSav
         {r.username}{r.is_you ? " (you)" : ""}
       </div>
       <div style={{ fontSize: "14px", fontWeight: "900", color: theme.text, flexShrink: 0 }}>
-        {r.wins}<span style={{ fontSize: "10px", color: theme.textFaint, marginLeft: "3px" }}>W</span>
+        {rowValue(r)}
       </div>
     </div>
   );
 
   const youAreListed = board.some(r => r.is_you);
+
+  // Empty-state / not-ranked-yet copy, tailored per category + metric.
+  const emptyMsg = category === "vsBot"
+    ? <>No wins recorded at this difficulty yet.<br/>Be the first to make the board!</>
+    : onlineMetric === "winrate"
+      ? <>Not enough games yet.<br/>Play at least 20 online games to appear here.</>
+      : onlineMetric === "streak"
+        ? <>No win streaks yet.<br/>Win a few online games in a row to get ranked!</>
+        : <>No online wins recorded yet.<br/>Be the first to make the board!</>;
+  const notRankedMsg = category === "vsBot"
+    ? <>No wins here yet. Win a <b>{activeDiff}</b> game to get ranked!</>
+    : onlineMetric === "winrate"
+      ? <>Play at least 20 online games to unlock this board.</>
+      : onlineMetric === "streak"
+        ? <>Win a couple online games in a row to get ranked!</>
+        : <>No online wins yet. Play a friend online to get ranked!</>;
 
   return (
     <div style={{
@@ -1755,12 +1803,37 @@ function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSav
         usernameForm
       ) : (
         <>
-          {/* Difficulty tabs */}
-          <div style={{ display: "flex", gap: "6px", padding: "14px 16px 6px", overflowX: "auto", flexShrink: 0 }}>
-            {DIFFICULTIES.map(d => {
-              const on = activeDiff === d.id;
+          {/* Top-level category tabs */}
+          <div style={{ display: "flex", gap: "8px", padding: "14px 16px 0", flexShrink: 0 }}>
+            {[
+              { id: "vsBot",  label: "vs Bot",  emoji: "🤖", accent: VS_BOT_ACCENT },
+              { id: "online", label: "Online",  emoji: "🌐", accent: ONLINE_ACCENT },
+            ].map(c => {
+              const on = category === c.id;
               return (
-                <button key={d.id} onClick={() => setActiveDiff(d.id)} style={{
+                <button key={c.id} onClick={() => setCategory(c.id)} style={{
+                  flex: 1, padding: "12px 8px",
+                  background: on ? (dark ? `${c.accent}18` : `${c.accent}22`) : "transparent",
+                  border: `2px solid ${on ? c.accent : theme.border}`,
+                  borderRadius: "12px", cursor: "pointer",
+                  color: on ? c.accent : theme.textDim,
+                  fontFamily: "'Courier New', monospace", fontSize: "13px", fontWeight: "900",
+                  letterSpacing: "0.05em", textTransform: "uppercase",
+                  transition: "all 0.15s",
+                }}>
+                  {c.emoji} {c.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Sub-tabs: difficulty (vs Bot) or metric (Online) */}
+          <div style={{ display: "flex", gap: "6px", padding: "12px 16px 6px", overflowX: "auto", flexShrink: 0 }}>
+            {(category === "vsBot" ? DIFFICULTIES : ONLINE_METRICS).map(d => {
+              const on = category === "vsBot" ? activeDiff === d.id : onlineMetric === d.id;
+              const setter = category === "vsBot" ? setActiveDiff : setOnlineMetric;
+              return (
+                <button key={d.id} onClick={() => setter(d.id)} style={{
                   flex: 1, minWidth: "72px", padding: "8px 6px",
                   background: on ? (dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)") : "transparent",
                   border: `2px solid ${on ? (dark ? "#666" : "#888") : theme.border}`,
@@ -1785,7 +1858,7 @@ function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSav
               <div style={{ textAlign: "center", color: CLR.X, fontSize: "12px", marginTop: "30px" }}>{boardError}</div>
             ) : board.length === 0 ? (
               <div style={{ textAlign: "center", color: theme.textFaint, fontSize: "12px", marginTop: "36px", lineHeight: 1.7 }}>
-                No wins recorded at this difficulty yet.<br/>Be the first to make the board!
+                {emptyMsg}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -1794,32 +1867,38 @@ function LeaderboardScreen({ user, theme, dark, onClose, username, onUsernameSav
             )}
           </div>
 
-          {/* Your placement (only if you're not already visible in the top list) */}
-          {!boardLoading && !boardError && (
+          {/* Guests: a sign-up nudge, unrelated to rank */}
+          {!boardLoading && !boardError && !isMember && (
             <div style={{ flexShrink: 0, padding: "12px 16px 16px", borderTop: `1px solid ${theme.border}`, maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
-              <div style={{ fontSize: "9px", letterSpacing: "0.2em", color: theme.textFaint, textTransform: "uppercase", marginBottom: "8px" }}>Your placement</div>
-              {!isMember ? (
-                <>
-                  <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.6, marginBottom: "10px" }}>
-                    Sign up to claim a username and get ranked on this board!
-                  </div>
-                  <button onClick={onSignUp} style={{ ...mkBtn(true, theme), padding: "9px 20px", fontSize: "11px" }}>Sign up / Log in</button>
-                </>
-              ) : myRank ? (
-                !youAreListed ? boardRow({ rank: myRank.rank, username, wins: myRank.wins, is_you: true }, "me")
-                             : <div style={{ fontSize: "12px", color: theme.textDim }}>You're #{myRank.rank} — shown above ↑</div>
-              ) : (
-                <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.6 }}>
-                  No wins here yet. Win a <b>{activeDiff}</b> game to get ranked!
-                </div>
-              )}
-              {isMember && (
-                <button onClick={() => setEditing(true)}
-                  {...linkBtnProps(theme)}
-                  style={{ ...linkBtnProps(theme).style, marginTop: "10px", padding: 0, fontSize: "10px" }}>
-                  Playing as {username} · change
-                </button>
-              )}
+              <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.6, marginBottom: "10px" }}>
+                Sign up to claim a username and get ranked on this board!
+              </div>
+              <button onClick={onSignUp} style={{ ...mkBtn(true, theme), padding: "9px 20px", fontSize: "11px" }}>Sign up / Log in</button>
+            </div>
+          )}
+
+          {/* Members: your rank pinned as a genuine extension of the list, behind
+              a "⋯" gap divider — it reads as "here's where you sit", not a
+              separate panel. Vanishes entirely once you're visible in the top
+              list above (nothing left to pin). */}
+          {!boardLoading && !boardError && isMember && myRank && !youAreListed && (
+            <div style={{ flexShrink: 0, padding: "0 16px 14px", maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+              <div style={{ textAlign: "center", color: theme.textFaint, fontSize: "13px", letterSpacing: "0.4em", padding: "2px 0 8px" }}>⋯</div>
+              {boardRow({ rank: myRank.rank, username, wins: myRank.wins, winRate: myRank.winRate, streak: myRank.streak, is_you: true }, "me")}
+            </div>
+          )}
+          {!boardLoading && !boardError && isMember && !myRank && (
+            <div style={{ flexShrink: 0, padding: "12px 16px 4px", borderTop: `1px solid ${theme.border}`, maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+              <div style={{ fontSize: "12px", color: theme.textDim, lineHeight: 1.6 }}>{notRankedMsg}</div>
+            </div>
+          )}
+          {isMember && (
+            <div style={{ flexShrink: 0, padding: "8px 16px 16px", maxWidth: "460px", width: "100%", margin: "0 auto", boxSizing: "border-box", textAlign: "center" }}>
+              <button onClick={() => setEditing(true)}
+                {...linkBtnProps(theme)}
+                style={{ ...linkBtnProps(theme).style, padding: 0, fontSize: "10px" }}>
+                Playing as {username} · change
+              </button>
             </div>
           )}
         </>
